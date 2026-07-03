@@ -66,7 +66,11 @@ The installer:
 Launch `BatteryCap.app`. A battery icon appears in the menu bar. Click it to:
 
 - See current charge %.
-- Pick a cap (50 / 60 / 70 / 80 / off).
+- Pick a preset cap (50 / 60 / 70 / 80).
+- Pick **Set custom cap…** for any value 50–100. Pre-fills with
+  `current charge + 3` (clamped) — the fastest plateau test value, since
+  Intel firmware overshoots the BCLM target by ~3% on purpose.
+- Remove cap (sets to 100%).
 - Toggle persistence on boot.
 
 The SMC write itself prompts for an admin password each time (via native

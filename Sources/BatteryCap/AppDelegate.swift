@@ -76,6 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.tag = value
         }
 
+        // Free-form entry. Pre-fills with current_charge + 3 (clamped) for
+        // the fast proving test described in the README.
+        let customItem = menu.addItem(withTitle: "Set custom cap…",
+                                      action: #selector(setCustomCap),
+                                      keyEquivalent: "")
+        customItem.target = self
+        customItem.tag = 200
+
         menu.addItem(.separator())
 
         let removeItem = menu.addItem(withTitle: "Remove cap (100%)",
@@ -103,9 +111,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Actions
 
-    @objc private func setCap(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? Int else { return }
+    /// Shared apply path used by both the preset buttons and the custom
+    /// dialog. Bounds check is the caller's responsibility.
+    private func applyCapValue(_ value: Int) {
         guard !isApplyingCap else { return }
+        guard (50...100).contains(value) else { return }
         isApplyingCap = true
         pendingCap = value
         refresh()
@@ -123,6 +133,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.refresh()
         }
+    }
+
+    @objc private func setCap(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? Int else { return }
+        applyCapValue(value)
+    }
+
+    /// Opens a modal dialog with a free-form cap entry. Pre-fills with the
+    /// existing cap if set, otherwise `current charge + 3` clamped to 50..100
+    /// (the "fast proving test" value).
+    @objc private func setCustomCap() {
+        guard !isApplyingCap else { return }
+
+        // Compute suggested value.
+        let suggested: Int
+        if let cap = currentCap, cap < 100, cap >= 50 {
+            suggested = cap
+        } else if currentCharge >= 0 {
+            suggested = min(max(currentCharge + 3, 50), 100)
+        } else {
+            suggested = 60
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Set custom charge cap"
+        let chargeStr = currentCharge >= 0 ? "\(currentCharge)%" : "unknown"
+        let overshoot = min(suggested + 3, 100)
+        alert.informativeText = """
+            Enter an integer from 50 to 100.
+
+            Current charge: \(chargeStr)
+            Suggested: \(suggested)% → battery will charge to ~\(overshoot)% (Intel firmware overshoots ~3%)
+
+            Tip: set cap to current charge + 3 for the fastest plateau test.
+            """
+        alert.alertStyle = .informational
+
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        textField.stringValue = "\(suggested)"
+        textField.placeholderString = "50–100"
+        alert.accessoryView = textField
+        // Focus the text field on open so the user can type immediately.
+        alert.window.initialFirstResponder = textField
+
+        alert.addButton(withTitle: "Set cap")
+        alert.addButton(withTitle: "Cancel")
+
+        // runModal() blocks the main thread — fine here because menu bar
+        // interactions are user-driven and the OS keeps the run loop alive.
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
+
+        let trimmed = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(trimmed), (50...100).contains(value) else {
+            let errAlert = NSAlert()
+            errAlert.alertStyle = .warning
+            errAlert.messageText = "Invalid value"
+            errAlert.informativeText = """
+                "\(trimmed)" is not an integer between 50 and 100.
+
+                BCLM is a UInt8 storing 0–100; values outside 50–100 are rejected \
+                to avoid deep-discharge risk (below 50) or no-op writes (above 100).
+                """
+            errAlert.addButton(withTitle: "OK")
+            errAlert.runModal()
+            return
+        }
+
+        applyCapValue(value)
     }
 
     @objc private func removeCap(_ sender: NSMenuItem) {
@@ -200,6 +279,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     item.state = active ? .on : .off
                     item.isEnabled = !isApplyingCap
                 }
+            }
+            if let customItem = menu.item(withTag: 200) {
+                // Show a checkmark if the current cap is non-preset.
+                let isPreset = capChoices.contains(currentCap ?? -1) || capChoices.contains(pendingCap ?? -1)
+                customItem.state = (!isPreset && (currentCap ?? 0) < 100) ? .on : .off
+                customItem.isEnabled = !isApplyingCap
             }
             if let persistItem = menu.item(withTag: 102) {
                 persistItem.title = persistence.isInstalled
