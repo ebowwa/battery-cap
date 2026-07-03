@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reference template for the LaunchDaemon that re-applies the battery cap
+  on boot. NOT bundled into the binary — PersistenceInstaller generates
+  this dynamically with the correct binary path substituted in. Kept here
+  for documentation and for hand-install if needed.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ebowwa.battery-cap</string>
+
+    <!-- Path to the BatteryCap binary on the target machine. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/BatteryCap.app/Contents/MacOS/BatteryCap</string>
+        <string>--boot-apply</string>
+    </array>
+
+    <!-- Re-apply the cap as soon as the daemon loads at boot. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Don't restart if it exits — we only want it to run once per boot. -->
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
