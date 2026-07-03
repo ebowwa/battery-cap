@@ -5,6 +5,10 @@ SMC `BCLM` key. The DIY equivalent of AlDente — about 300 lines of Swift.
 
 ![status: experimental](https://img.shields.io/badge/status-experimental-orange)
 
+> 📄 **[Full PRD → docs/PRD.md](docs/PRD.md)** — product thinking, success
+> metrics, risks, roadmap. The README covers *how to use it*; the PRD covers
+> *why it exists and how we know it's working*.
+
 ## What it does
 
 - Adds a menu bar item showing current charge %.
