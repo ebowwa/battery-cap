@@ -14,8 +14,9 @@
 ## 1. Executive Summary
 
 BatteryCap is a minimal, open-source macOS menu bar application that caps
-battery charge on Intel MacBooks (2013–2015 retina models) by writing the
-System Management Controller (SMC) key `BCLM` (Battery Charge Level Max).
+battery charge on Intel MacBooks (2012–2017 era, including USB-C models)
+by writing the System Management Controller (SMC) key `BCLM`
+(Battery Charge Level Max).
 
 It exists because the alternatives each fail one of three tests:
 
@@ -40,9 +41,10 @@ signing drama for v1, native macOS auth dialog via `osascript`.
 
 A lithium-ion cell held at 100% charge (4.20 V/cell) for months on end
 experiences accelerated **calendar aging** — capacity loss that occurs
-independent of charge cycles. A 2013–2015 MacBook Pro Retina kept
-perpetually at 100% will exhibit measurable capacity loss within 12 months
-and visible battery swelling within 24–36 months. This is well-documented
+independent of charge cycles. An Intel MacBook Pro (2013–2017 era, including
+the A1706 Touch Bar USB-C generation) kept perpetually at 100% will exhibit
+measurable capacity loss within 12 months and visible battery swelling
+within 24–36 months. This is well-documented
 in [Battery University BU-808](https://batteryuniversity.com/article/bu-808-how-to-prolong-lithium-based-batteries).
 
 The same cell held at 60% (~3.85 V) experiences roughly **one-third** the
@@ -60,13 +62,14 @@ runners).
    due to kernel entitlement enforcement.
 4. **macOS 26.4+** has native charge limiting but caps at 80% minimum
    (insufficient for storage-grade stress reduction) and doesn't run on
-   2013–2015 Intel hardware anyway.
+   the 2012–2017 Intel hardware anyway.
 
-The user is on a 2015 Intel i5 MacBook Pro with 977 cycles (98% of rated
-life) and a current capacity of 3594 mAh. Extending remaining life via a
-60% cap is the immediate need. The same hardware profile exists across
-the long tail of Intel Macs still in service as home servers, CI runners,
-and family hand-me-downs.
+The user is on a **MacBook Pro A1706 (13" with Touch Bar, 2016 or 2017)**
+— a USB-C-only Intel Mac with the TI `bq20z451` battery gauge chip —
+showing 977 cycles (98% of rated life) and a current capacity of 3594 mAh.
+Extending remaining life via a 60% cap is the immediate need. The same
+hardware profile exists across the long tail of Intel Macs still in
+service as home servers, CI runners, and family hand-me-downs.
 
 ---
 
@@ -129,10 +132,10 @@ left: sub-80% caps on Intel Macs that can't run modern macOS.
 ## 5. Target Users
 
 ### Primary: Always-on Intel MBP operators
-Developers using a 2013–2015 MBP as a home server, CI runner, media
-server, or kiosk. The battery is rarely asked to deliver power; calendar
-aging dominates. Wants sub-80% cap to maximize remaining cell life
-without thinking about it.
+Developers using a 2013–2017 MBP (Retina or Touch Bar generation) as a
+home server, CI runner, media server, or kiosk. The battery is rarely
+asked to deliver power; calendar aging dominates. Wants sub-80% cap to
+maximize remaining cell life without thinking about it.
 
 ### Secondary: Battery-life-extension hobbyists
 Users who acquired an older Intel MBP cheap and want to extend its
@@ -149,21 +152,56 @@ sensor reading, etc.).
 ## 6. Target Hardware
 
 ### Primary target
-- **Model**: MacBook Pro Retina 13" / 15" (A1502 / A1398), 2013–2015
-- **Battery gauge**: TI `bq20z451`
-- **CPU**: Intel i5 / i7 (4th–5th gen)
-- **macOS**: 13 Ventura, 14 Sonoma
-- **Charging**: MagSafe 2 (with LED indicator — `BFCL` key works)
+- **Model**: MacBook Pro 13" with Touch Bar, **A1706** (Late 2016 or Mid 2017)
+- **Battery gauge**: TI `bq20z451` (confirmed across A1706/A1708/A1964 era)
+- **Battery**: A1819, 49.2 Wh lithium-polymer, ~10h wireless web
+- **CPU**: Intel i5 / i7 (6th–7th gen, dual-core)
+- **Charging**: USB-C (Thunderbolt 3), no MagSafe, **no LED on the charging port**
+- **macOS ceiling (official)**: 2016 model → Monterey (12); 2017 model → Ventura (13)
+- **macOS in practice**: user is reinstalling macOS 13 Ventura or 14 Sonoma
+  (Sonoma on A1706 requires OpenCore Legacy Patcher)
+
+### Verified behavior on this generation
+- ✅ `BCLM` key exists and accepts writes (multiple user reports on r/mac,
+  Hacker News, MacRumors confirm successful charge limiting on 2016–2019
+  Intel MBPs with Touch Bar)
+- ❌ `BFCL` key likely doesn't exist or is meaningless — there is no MagSafe
+  LED on USB-C Macs for it to control. The
+  [MacRumors SMC thread](https://forums.macrumors.com/threads/2439923/)
+  documents BFCL as absent on pre-Core iX Macs; for USB-C Core iX Macs the
+  key is technically present but has no hardware effect.
+- 🔌 Related SMC keys observed on this generation (not used by BatteryCap v1):
+  `CH0B` (charge control: 00 = allow, 02 = inhibit), `BRSC` (charge level
+  reading). Documented for future work in §15 OQ7.
+
+### Visual feedback (or lack thereof)
+Because A1706 has no charging LED, **the user cannot use visual inspection
+to confirm the cap is working**. The fast proving test relies on:
+- `pmset -g batt` showing "AC Power; not charging" once cap is reached
+- Menu bar % not climbing past `cap + 3` (Intel firmware overshoot)
+- `system_profiler SPPowerDataType` showing `Charging: No`
+
+On MagSafe-era Macs (A1502/A1398 2013–2015), the LED color change is a
+useful secondary signal — but that doesn't apply to A1706 and shouldn't
+be relied on as a test criterion.
 
 ### Known-incompatible
-- Any Apple Silicon Mac (different SMC key, different security model)
-- MacBook (2015–2017) with single USB-C port (no `BFCL`; `BCLM` may work but untested)
-- Pre-2013 Intel Macs (different SMC firmware; may work but untested)
-- macOS 15+ on any Intel Mac (kernel entitlement block)
+- Any Apple Silicon Mac (different SMC key `CHWA`, different security model)
+- Pre-2012 Intel Macs (different SMC firmware; may work but untested)
+- macOS 15+ on any Intel Mac (kernel entitlement block, per bclm README)
+
+### Likely-compatible but untested
+- MacBook Pro Retina 13"/15" (A1502/A1398, 2013–2015) — MagSafe 2 era,
+  BFCL controls the LED indicator. Code path identical.
+- MacBook Pro 13"/15" with Touch Bar (A1707, 2016–2017) — same generation
+  as A1706, just larger.
+- MacBook Pro 13" Function Keys (A1708, 2016–2017) — same generation,
+  no Touch Bar.
+- MacBook 12" (A1964, 2017) — single USB-C port, same battery gauge chip.
 
 ### User's specific deployment target
-- 2015 MacBook Pro Retina 13", Intel i5
-- macOS 13 Ventura or 14 Sonoma (TBD post-reset)
+- MacBook Pro A1706 (13" with Touch Bar, 2016 or 2017), Intel i5
+- macOS 13 Ventura or 14 Sonoma (TBD post-reset, depends on year + OCLP)
 - Battery: 977 cycles, 3594 mAh full charge capacity, condition "Normal"
 - Use case: always-on AC, target cap 60%
 
@@ -257,7 +295,8 @@ sensor reading, etc.).
 ## 9. User Stories
 
 ### US1 — The CI runner operator
-> As a developer with a 2015 MBP running GitHub Actions runner 24/7, I want
+> As a developer with a 2016–2017 MBP (Touch Bar, USB-C) running GitHub
+> Actions runner 24/7, I want
 > to cap charge at 60% so the battery doesn't swell over the next two years
 > of always-on AC, without paying for AlDente Pro or trusting closed-source
 > binaries with kernel access.
@@ -527,9 +566,27 @@ app that already has signing infrastructure, OR when Apple tightens
 **Mitigation**: LaunchDaemon runs at every boot, so cap is restored within ~30 seconds of boot completing. Could add an hourly re-apply cron as defense-in-depth, but currently unnecessary.
 
 ### R5 — BFCL write semantics differ across models
-**Likelihood**: Low (BFCL is well-documented for the target hardware).
-**Impact**: Low — we already ignore `keyNotFound` which is the expected failure mode on USB-C Macs.
-**Mitigation**: Current code is correct for target. If a different model shows up, the `try?` quietly ignores the write.
+**Likelihood**: Confirmed — the A1706 target is itself a USB-C-only Mac
+with no MagSafe LED, which is exactly the case where `BFCL` is either
+absent or has no hardware effect.
+**Impact**: None. The code already handles this correctly:
+`CapController.writeBFCL` is called via `try?`, which silently swallows
+the `keyNotFound` error. On A1706 the BFCL write effectively no-ops,
+which is the desired behavior — there's no LED to control anyway.
+**Verification**: Confirmed via the
+[MacRumors SMC thread](https://forums.macrumors.com/threads/2439923/)
+which documents BFCL as absent on pre-Core iX Macs, and via community
+knowledge that USB-C Macs (2016+) ship without a MagSafe LED for BFCL
+to drive. The `bq20z451` battery gauge chip itself is present on A1706
+(used for fuel gauging, not for LED control).
+**Cross-model behavior** (for the broader compatibility table):
+- 2012–2015 Retina (A1502/A1398, MagSafe 2): BFCL exists, controls LED
+- 2016–2017 USB-C (A1706/A1707/A1708): BFCL likely absent or no-op
+- 2015 MacBook (A1536, single USB-C): BFCL likely absent
+- Pre-2012 (Core 2 Duo): BFCL absent, BCLM also absent
+
+Our code path is identical for all of these — `try?` handles whatever
+the SMC returns.
 
 ### R6 — Apple changes LaunchDaemon loading in future macOS
 **Likelihood**: Low (LaunchDaemons are a stable, documented API).
@@ -550,9 +607,10 @@ These are things we haven't decided about yet. None block v1.0.
 - **OQ1**: Should we re-apply the cap periodically (hourly cron) as
   defense-in-depth against silent SMC resets? Currently relying on
   boot-only re-application.
-- **OQ2**: Should the menu bar item show MagSafe LED state for additional
-  confidence? Would require reading the LED SMC key (need to identify
-  which one).
+- **OQ2**: ~~Should the menu bar item show MagSafe LED state for additional
+  confidence?~~ **Moot for A1706** (no LED to read). Would only matter if
+  extending support to A1502/A1398 (2013–2015 Retina). Defer unless those
+  models become primary targets.
 - **OQ3**: Should we add a "test mode" that auto-sets cap to `current + 3`
   for 30 minutes then reverts? Useful for one-shot validation, but
   complicates the state machine.
@@ -590,7 +648,8 @@ These are things we haven't decided about yet. None block v1.0.
 
 ### v1.2 (insight)
 - [ ] Optional statistics panel: cycle count delta since install, days capped
-- [ ] Optional MagSafe LED state indicator in menu
+- [ ] Optional charge-status indicator in menu (read from `pmset` since
+  A1706 has no MagSafe LED to inspect)
 - [ ] Logging to `~/Library/Logs/BatteryCap.log` for diagnostics
 
 ### v2.0 (integration)
@@ -637,9 +696,15 @@ The single test that proves the app works is the **fast proving test**:
 2. Open BatteryCap, click "Set custom cap…"
 3. Dialog pre-fills with 54 (= 51 + 3)
 4. Click "Set cap", enter admin password
-5. MagSafe LED goes amber, then green at ~57%
-6. `pmset -g batt` shows "AC Power; not charging" once plateau reached
-7. Battery % does not climb past 60 for 15 minutes
+5. Within 15 min, `pmset -g batt` shows "AC Power; not charging"
+   once the plateau is reached
+6. Battery % does not climb past `cap + 3` (Intel firmware overshoot)
+   for 15 minutes
+7. `system_profiler SPPowerDataType | grep Charging` shows `Charging: No`
+
+On MagSafe-era Macs (A1502/A1398, 2013–2015), the additional signal of
+the MagSafe LED turning green at the cap is available — but A1706 has
+no charging LED, so don't rely on visual inspection.
 
 If this passes, the app works for its primary purpose. Everything else
 is polish.
@@ -651,7 +716,7 @@ is polish.
 | 1     | Install on Intel target           | `file` shows x86_64, app launches      |
 | 2     | SMC read sanity                   | `--read` returns 50–100                |
 | 3     | SMC write via CLI                 | Read-back matches                      |
-| 4     | Fast proving test                 | Plateau within 15 min, LED goes green  |
+| 4     | Fast proving test                 | Plateau within 15 min, `pmset` shows "not charging" |
 | 5     | UI + osascript flow               | Native auth dialog, menu updates       |
 | 6     | Overnight soak                    | Cap holds 7 days, no new cycles        |
 | 7     | Reboot persistence                | Cap auto-applies after reboot          |
@@ -672,7 +737,7 @@ BatteryCap stands on the shoulders of:
   Their `Sources/bclm/main.swift` informed the helper-mode dispatch.
 - **[charlie0129/batt](https://github.com/charlie0129/batt)** — Apple
   Silicon equivalent. Their docs on the broader charge-limiting landscape
-  (firmware compatibility, calendar aging, MagSafe LED behavior) were
+  (firmware compatibility, calendar aging, USB-C charging behavior) were
   essential background reading.
 - **[Battery University BU-808](https://batteryuniversity.com/article/bu-808-how-to-prolong-lithium-based-batteries)**
   — The canonical reference for lithium-ion cell preservation.
@@ -693,8 +758,9 @@ BatteryCap stands on the shoulders of:
   that controls the maximum charge the battery will accept. Takes a
   UInt8 value 0–100. Intel Macs only.
 - **BFCL** — Battery Final Charge Level. Companion key to BCLM that
-  controls the MagSafe LED color. USB-C Macs lack this key; we silently
-  ignore `keyNotFound` for them.
+  historically controlled the MagSafe LED color on 2012–2015 Retina Macs.
+  Absent or no-op on USB-C Macs (2016+, including A1706) — there's no LED
+  for it to control. We silently ignore `keyNotFound` via `try?`.
 - **CHWA** — Apple Silicon equivalent of BCLM. Only supports 80 or 100.
   Out of scope for BatteryCap.
 - **SMC** — System Management Controller. The embedded controller on
@@ -708,9 +774,14 @@ BatteryCap stands on the shoulders of:
   delivered. One cycle = 100% discharge, regardless of how many sessions
   it took. Apple rates MacBook batteries for ~1000 cycles before 80%
   capacity.
-- **MagSafe 2** — The magnetic charging connector used on 2013–2015
-  MacBook Pro Retina. Has an LED that is amber while charging and green
-  when the cap is reached (or fully charged).
+- **MagSafe 2** — The magnetic charging connector used on 2012–2015
+  MacBook Pro Retina (A1502/A1398). Has an LED that is amber while charging
+  and green when the cap is reached (or fully charged). **Not present on
+  A1706** — that generation switched to USB-C charging with no LED.
+- **USB-C (Thunderbolt 3)** — The charging/data connector used on
+  2016+ MacBook Pro including A1706. Provides Power Delivery negotiation
+  via a TI PD controller. No visual feedback on the charging port itself;
+  charge status must be read via `pmset` or `system_profiler`.
 - **LaunchDaemon** — A macOS system service that runs as root at boot.
   Defined by a plist in `/Library/LaunchDaemons/`. Used here for cap
   persistence across reboots.

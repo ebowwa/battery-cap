@@ -31,9 +31,16 @@ to deliver power. See [Battery University BU-808](https://batteryuniversity.com/
 | 15 Sequoia and newer    | Broken            | Kernel entitlement enforcement blocks SMC writes   |
 | Apple Silicon (any)     | Not supported     | Uses `CHWA`, only 80 / 100 — out of scope here      |
 
-Confirmed against: MacBook Pro Retina 13"/15" with `bq20z451` gauge chip
-(2013–2015 models). The M1 dev machine this is built on cannot test the SMC
-write itself — only the Intel target can validate that.
+Confirmed against: **MacBook Pro A1706 (13" with Touch Bar, 2016–2017)**
+with `bq20z451` gauge chip. Should also work on the broader 2012–2017
+Intel MBP range (A1502/A1398 Retina, A1707/A1708 Touch Bar generation).
+The M1 dev machine this is built on cannot test the SMC write itself —
+only the Intel target can validate that.
+
+> ⚠️ **A1706 has no MagSafe LED.** Don't rely on visual charging feedback.
+> Confirm the cap is working via `pmset -g batt` (shows "AC Power; not
+> charging" at the cap) or `system_profiler SPPowerDataType`. The MagSafe
+> LED test only applies to A1502/A1398 (2013–2015) Retina models.
 
 ## Build
 
