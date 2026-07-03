@@ -21,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingCap: Int? = nil      // while async write in flight
     private var isApplyingCap: Bool = false
 
+    // Conflict detection state.
+    private var detectedConflicts: [ConflictDetector.Conflict] = []
+    private var conflictCheckComplete: Bool = false  // false until first scan returns
+
     // Sanity bounds. BCLM is documented 50..100; we cap UI at 80 because
     // above 80 makes no sense for the calendar-aging use case.
     private let capChoices: [Int] = [50, 60, 70, 80]
@@ -38,6 +42,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.refresh()
         }
         refresh()
+
+        // Run conflict detection asynchronously. pmset -g takes ~50ms; we
+        // don't want to block the menu bar from appearing.
+        runConflictDetection()
+    }
+
+    // MARK: Conflict detection
+
+    private func runConflictDetection() {
+        conflictCheckComplete = false
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = ConflictDetector().detect()
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.detectedConflicts = result.conflicts
+                self.conflictCheckComplete = true
+                self.refresh()
+            }
+        }
+    }
+
+    @objc private func rescanConflicts() {
+        runConflictDetection()
+    }
+
+    @objc private func showConflictDialog() {
+        let alert = NSAlert()
+        alert.messageText = detectedConflicts.isEmpty
+            ? "No conflicts detected"
+            : "\(detectedConflicts.count) conflict(s) detected"
+        alert.alertStyle = detectedConflicts.isEmpty ? .informational : .warning
+
+        if detectedConflicts.isEmpty {
+            alert.informativeText = """
+                Checked for: macOS Optimized Battery Charging, AlDente, batt,
+                bclm persistence, and macOS 26.4+ native charge limit.
+
+                None found. Your BatteryCap cap should hold without interference.
+                """
+        } else {
+            // One block per conflict: title + detail, separated by a divider.
+            let body = detectedConflicts.map { conflict in
+                "\(conflict.title)\n\n\(conflict.detail)"
+            }.joined(separator: "\n\n————————————————\n\n")
+            alert.informativeText = body
+        }
+
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Re-scan")
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            runConflictDetection()
+        }
     }
 
     // MARK: Menu construction
@@ -48,6 +105,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(withTitle: "BatteryCap",
                      action: nil, keyEquivalent: "").isEnabled = false
+
+        // Conflict status row. Title is dynamically updated in refresh().
+        // Clicking opens the detail dialog. Sits at the top so it's visible.
+        let conflictItem = menu.addItem(withTitle: "Checking for conflicts…",
+                                        action: #selector(showConflictDialog),
+                                        keyEquivalent: "")
+        conflictItem.target = self
+        conflictItem.tag = 300
 
         menu.addItem(.separator())
 
@@ -98,6 +163,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        keyEquivalent: "")
         persistItem.target = self
         persistItem.tag = 102
+
+        menu.addItem(.separator())
+
+        // Manual re-scan for conflicts. Useful after the user has resolved
+        // a conflict (e.g., uninstalled AlDente) to confirm BatteryCap sees
+        // a clean state.
+        let rescanItem = menu.addItem(withTitle: "Re-scan for conflicts",
+                                      action: #selector(rescanConflicts),
+                                      keyEquivalent: "")
+        rescanItem.target = self
 
         menu.addItem(.separator())
 
@@ -263,7 +338,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             capText = "cap ?"
         }
-        statusItem.button?.title = "🔋 \(chargeText) · \(capText)"
+        // Prefix with ⚠️ when conflicts are detected. The visual indicator
+        // in the menu bar means the user doesn't need to open the menu to
+        // know something needs attention.
+        let warningPrefix = !detectedConflicts.isEmpty ? "⚠️ " : ""
+        statusItem.button?.title = "\(warningPrefix)🔋 \(chargeText) · \(capText)"
 
         // Menu items
         if let menu = statusItem.menu {
@@ -291,6 +370,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ? "Disable persistence on boot"
                     : "Persist cap on boot  ✓ to enable"
                 persistItem.state = persistence.isInstalled ? .on : .off
+            }
+            if let conflictItem = menu.item(withTag: 300) {
+                if !conflictCheckComplete {
+                    conflictItem.title = "Checking for conflicts…"
+                    conflictItem.isEnabled = false
+                } else if detectedConflicts.isEmpty {
+                    conflictItem.title = "✓ No conflicts detected"
+                    conflictItem.isEnabled = true  // Still clickable for details
+                } else {
+                    conflictItem.title = "⚠️ \(detectedConflicts.count) conflict(s) — click for details"
+                    conflictItem.isEnabled = true
+                }
             }
         }
     }

@@ -66,6 +66,22 @@ if args.count >= 2 {
         print("BatteryCap helper v1.0")
         exit(EXIT_SUCCESS)
 
+    case "--detect-conflicts":
+        // Diagnostic mode for the conflict detector. Prints what would be
+        // surfaced in the menu UI. Useful for debugging on dev machines
+        // where the menu bar isn't visible (headless, SSH, etc.).
+        let result = ConflictDetector().detect()
+        if result.conflicts.isEmpty {
+            print("No conflicts detected.")
+            exit(EXIT_SUCCESS)
+        }
+        print("\(result.conflicts.count) conflict(s) detected:")
+        for conflict in result.conflicts {
+            print("- \(conflict.title)")
+            print("  \(conflict.detail.replacingOccurrences(of: "\n", with: "\n  "))")
+        }
+        exit(EXIT_SUCCESS)
+
     default:
         // Fall through to UI mode for unknown args (let the app show its menu).
         break

@@ -83,6 +83,76 @@ Launch `BatteryCap.app`. A battery icon appears in the menu bar. Click it to:
   Intel firmware overshoots the BCLM target by ~3% on purpose.
 - Remove cap (sets to 100%).
 - Toggle persistence on boot.
+- See conflict status (top of menu). `⚠️ ` prefix on the menu bar icon
+  means another tool or setting may be fighting BatteryCap.
+
+## Troubleshooting
+
+### "I set the cap but the battery still charges to 100%"
+
+This is almost always caused by a conflicting tool or macOS setting that
+also writes the BCLM key. BatteryCap checks for these on launch and shows
+a `⚠️ ` warning in the menu bar if any are detected. Click the warning to
+see what's conflicting and how to fix it.
+
+The detector checks for:
+
+| Conflict | What it is | How to resolve |
+| --- | --- | --- |
+| macOS Optimized Battery Charging | macOS's own learning-based charge delay | System Settings → Battery → Battery Health → (i) → Off |
+| AlDente (Free/Pro) | Writes BCLM on its own polling cycle | Quit AlDente + remove `/Library/LaunchDaemons/com.apphouseknight.aldente.*` |
+| batt (`charlie0129/batt`) | Apple-Silicon-only tool, but the daemon may be present | Quit batt.app + remove its LaunchDaemon |
+| bclm persistence (`zackelia/bclm`) | LaunchDaemon re-writes BCLM on every boot | `sudo bclm unpersist` |
+| macOS native charge limit (macOS 26.4+) | Built-in chlim charge cap | System Settings → Battery → Charge Limit → Off |
+
+### "Conflict detector says 'OBC status unknown'"
+
+On macOS 26+, Apple moved Optimized Battery Charging out of `pmset -g`
+into private preferences that aren't userland-readable. BatteryCap refuses
+to guess — it surfaces this as "manual verify" rather than risk a
+false-negative (silently telling you it's off when it isn't).
+
+To verify manually:
+1. Open System Settings → Battery → Battery Health
+2. Click the (i) next to Battery Health
+3. Confirm Optimized Battery Charging is **Off**
+
+### "Detector says clean but cap still doesn't hold"
+
+Rare, but possible causes:
+
+1. **Cap value was overwritten manually** since the last BatteryCap write.
+   Re-apply via the menu.
+2. **A different SMC writer exists** that we don't detect (e.g., a custom
+   script, smcFanControl plugin). Check `sudo fs_usage -w | grep SMC` for
+   SMC activity from processes other than `BatteryCap`.
+3. **macOS 15+ entitlement block**. If the target is on macOS 15 Sequoia
+   or newer, BCLM writes are silently rejected. Check `sw_vers`.
+4. **Hardware variant** we haven't tested. Run
+   `sudo /Applications/BatteryCap.app/Contents/MacOS/BatteryCap --read`
+   to verify the cap value is actually set in SMC.
+
+### Diagnostic mode
+
+```sh
+# Run conflict detection without launching the UI:
+/Applications/BatteryCap.app/Contents/MacOS/BatteryCap --detect-conflicts
+
+# Check current BCLM value:
+sudo /Applications/BatteryCap.app/Contents/MacOS/BatteryCap --read
+```
+
+### Reporting a bug
+
+Capture these and open an issue:
+
+```sh
+sw_vers
+sysctl hw.model
+system_profiler SPPowerDataType
+log show --predicate 'process == "BatteryCap"' --last 10m
+BatteryCap --detect-conflicts
+```
 
 The SMC write itself prompts for an admin password each time (via native
 macOS `osascript` dialog). Persistence removes that friction after the first

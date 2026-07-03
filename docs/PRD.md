@@ -255,6 +255,23 @@ be relied on as a test criterion.
 | FR25 | BFCL write fails with keyNotFound → silently ignored (expected on USB-C Macs) |
 | FR26 | LaunchDaemon install fails → user-visible error with diagnostic hint   |
 
+### Conflict detection (R7 mitigation)
+| ID  | Requirement                                                            |
+| --- | --------------------------------------------------------------------- |
+| FR27 | Run conflict detection on app launch (async, non-blocking)             |
+| FR28 | Detect macOS Optimized Battery Charging via `pmset -g` (tri-state)     |
+| FR29 | Detect AlDente via .app bundle paths AND LaunchDaemon paths            |
+| FR30 | Detect batt via LaunchDaemon at `com.charlieitzbatt.daemon.plist`      |
+| FR31 | Detect bclm persistence via LaunchDaemon at `com.zackelia.bclm.plist`  |
+| FR32 | Detect macOS 26.4+ native charge limit via `pmset chlim`               |
+| FR33 | Show `⚠️ ` prefix in menu bar title when any conflict is detected       |
+| FR34 | Show clickable "⚠️ N conflict(s) detected" menu row when conflicts exist |
+| FR35 | Show "✓ No conflicts detected" row when verified clean                 |
+| FR36 | Show "Checking for conflicts…" row while scan is in flight             |
+| FR37 | Provide "Re-scan for conflicts" manual trigger                         |
+| FR38 | Detail dialog lists each conflict with title + remediation hint         |
+| FR39 | When OBC status is unknown, surface as "manual verify" hint (not silent, not false) |
+
 ---
 
 ## 8. Non-Functional Requirements
@@ -289,6 +306,9 @@ be relied on as a test criterion.
 | NFR13 | Source under 1000 LOC (current: ~700)                      |
 | NFR14 | Zero external package dependencies                          |
 | NFR15 | No force-unwraps, no `try!`, no fatal errors in production paths |
+| NFR16 | Conflict detection must never produce false positives (verified absence required before claiming "clean") |
+| NFR17 | Conflict detection completes in < 500ms (currently ~150ms)  |
+| NFR18 | Unknown detection state is reported as "manual verify", never as "off" |
 
 ---
 
@@ -596,7 +616,15 @@ the SMC returns.
 ### R7 — User reports "battery at 100% even though cap is 60"
 **Likelihood**: Medium (this is the most likely user complaint).
 **Impact**: Low — almost always caused by user having set the cap in BatteryCap but also having macOS Optimized Battery Charging or AlDente fighting it.
-**Mitigation**: README "Troubleshooting" section will document the conflict. v1.1 should add a one-time check on launch that warns if `pmset -g` shows Optimized Charging is on.
+**Mitigation**: **SHIPPED in v0.1** (was planned for v1.1, promoted because
+silent failure is the dominant failure mode for SMC tools). The
+`ConflictDetector` runs on launch + on manual re-scan, checks for five
+conflict sources, surfaces results via a `⚠️ ` prefix on the menu bar
+icon and a clickable "N conflict(s) detected" row at the top of the menu.
+Each conflict carries a remediation hint (where to disable, what to
+uninstall). Tri-state detection for OBC: confirmed-on / confirmed-off /
+unknown — never false-positive or false-negative. See §7 FR27-FR34 and
+`Sources/BatteryCap/ConflictDetector.swift`.
 
 ---
 
@@ -631,19 +659,19 @@ These are things we haven't decided about yet. None block v1.0.
 - ✅ MVP: preset + custom cap, BCLM/BFCL write, LaunchDaemon persistence
 - ✅ Smart pre-fill (`current + 3`) for fast testing
 - ✅ Vendored SMCKit.swift (trimmed)
-- ✅ Tested on M1 dev (compiles, UI runs); Intel target validation pending
+- ✅ **ConflictDetector** (promoted from v1.1): OBC, AlDente, batt, bclm,
+  macOS native charge limit — tri-state for OBC, file-existence for others
+- ✅ Tested on M1 dev (compiles, UI runs, detector verified); Intel target validation pending
 
 ### v1.0 (blocker: Intel target validation)
 - [ ] Phase 4 (fast proving test) passes on Intel hardware
 - [ ] Phase 6 (overnight soak) passes — cap holds for 7 days
 - [ ] Phase 7 (persistence across reboot) passes
-- [ ] README "Troubleshooting" section added
 - [ ] First GitHub Release with built binary artifact
 
 ### v1.1 (polish)
 - [ ] Self-signing workflow + notarization for cleaner install
-- [ ] Conflict detection (AlDente, batt, bclm) at launch
-- [ ] Detect Optimized Battery Charging conflict and warn user
+- [ ] Conflict-aware install: warn user before installing if AlDente is detected
 - [ ] Better error messages with specific remediation steps
 
 ### v1.2 (insight)
@@ -749,6 +777,7 @@ BatteryCap stands on the shoulders of:
 | Version | Date       | Author  | Changes                          |
 | ------- | ---------- | ------- | -------------------------------- |
 | 0.1     | 2026-07-03 | @ebowwa | Initial PRD. Covers v0.1 shipped.|
+| 0.2     | 2026-07-03 | @ebowwa | Promoted R7 mitigation from v1.1 to v0.1 (ConflictDetector shipped). Added FR27-FR39, NFR16-NFR18. |
 
 ---
 
