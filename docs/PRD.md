@@ -403,6 +403,18 @@ v0.6 will add native-API integration for macOS 26.4+ AS (see OQ8).
 | FR71 | Custom cap dialog rejects values not in `Platform.validCapValues` with platform-specific error |
 | FR72 | `bootApply` validates saved cap against current platform before writing (handles Intel→AS migration edge case) |
 
+### Platform-conditional UI (v0.6)
+| ID  | Requirement                                                            |
+| --- | --------------------------------------------------------------------- |
+| FR73 | Platform is 4-way classified (intelFull / appleSiliconPre15 / appleSiliconBlocked / appleSiliconNativeAPI), not 2-way |
+| FR74 | `canControlChargeViaSMC` gates all cap-related UI: controls hidden entirely when false |
+| FR75 | `persistenceMakesSense` gates the Persist on Boot menu item           |
+| FR76 | On `!canControlChargeViaSMC`: menu shows recommendation (e.g., "use System Settings → Battery") instead of cap controls |
+| FR77 | Menu header includes platform label (e.g., "Apple Silicon · macOS 26.5") so user knows what mode we're in |
+| FR78 | Status item title shows platform tag (`⚠️ blocked` / `⚠️ native`) instead of misleading "cap ?" when SMC unavailable |
+| FR79 | CLI `status` output includes platform line + recommendation block when SMC unavailable |
+| FR80 | `capChoices` computed at runtime: `[50,60,70,80]` on Intel, `[80]` on AS |
+
 ---
 
 ## 8. Non-Functional Requirements
@@ -936,6 +948,7 @@ BatteryCap stands on the shoulders of:
 | 0.4     | 2026-07-03 | @ebowwa | Addressed OQ3: non-persistent test mode + first-class CLI for Claude-driven management. Added FR46-FR64. Raised NFR13 to 3000 LOC. |
 | 0.4.1   | 2026-07-03 | @ebowwa | Honesty pass: README "Confirmed against" was an overclaim (we targeted A1706, never tested on it). Split §6 into Reported behavior (third-party cites) / Self-validated (M1 dev) / Pending Intel target. README compatibility section restructured the same way. No code changes. |
 | 0.5     | 2026-07-04 | @ebowwa | Apple Silicon support (rescinds NG1). New Platform.swift abstracts arch detection; CapController uses BCLM (Intel) / CHWA (AS) per platform. Universal binary build via `--arch arm64 --arch x86_64`. UI hides unsupported presets on AS. New `--probe-smc` diagnostic. **Discovery**: entitlement lockdown on AS macOS 15+ means CHWA path is non-functional there (verified via probe). Added OQ8 for native-API integration (macOS 26.4+ AS). |
+| 0.6     | 2026-07-04 | @ebowwa | Platform-conditional UI. Platform enum expanded from 2-way (Intel/AS) to 4-way (intelFull / appleSiliconPre15 / appleSiliconBlocked / appleSiliconNativeAPI) — macOS version matters as much as arch. Menu now hides cap controls entirely on platforms where SMC writes can't work, shows recommendation text instead. Status item shows platform tag (⚠️ blocked / ⚠️ native) instead of misleading "cap ?". CLI status surfaces platform + recommendation. Verified on M1 macOS 26.5 (appleSiliconNativeAPI). |
 
 ## 21. Research findings incorporated (v0.4)
 

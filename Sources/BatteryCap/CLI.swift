@@ -163,15 +163,31 @@ enum StatusCommand {
         // Human-readable
         CLI.out("BatteryCap status")
         CLI.out("─────────────────────────────────────")
+        CLI.out("Platform:  \(Platform.current.shortLabel)")
+        if !Platform.current.canControlChargeViaSMC {
+            CLI.out("           \(Platform.current.statusTag) — SMC cap unavailable")
+        }
         CLI.out("Charge:    \(charge >= 0 ? "\(charge)%" : "unknown")")
-        CLI.out("Cap:       \(cap.map { "\($0)%" } ?? "not set")")
-        CLI.out("Persist:   \(persistenceInstalled ? "enabled (LaunchDaemon loaded)" : "disabled")")
-        if let test = testState {
-            let mins = test.remainingSeconds / 60
-            let secs = test.remainingSeconds % 60
-            CLI.out("Test mode: ACTIVE (value=\(test.testValue)%, \(mins)m\(secs)s remaining, reverts to \(test.originalCap)%)")
+        if Platform.current.canControlChargeViaSMC {
+            CLI.out("Cap:       \(cap.map { "\($0)%" } ?? "not set")")
+            CLI.out("Persist:   \(persistenceInstalled ? "enabled (LaunchDaemon loaded)" : "disabled")")
+            if let test = testState {
+                let mins = test.remainingSeconds / 60
+                let secs = test.remainingSeconds % 60
+                CLI.out("Test mode: ACTIVE (value=\(test.testValue)%, \(mins)m\(secs)s remaining, reverts to \(test.originalCap)%)")
+            } else {
+                CLI.out("Test mode: inactive")
+            }
         } else {
-            CLI.out("Test mode: inactive")
+            // Surface the recommendation as a status hint.
+            CLI.out("")
+            CLI.out("Recommendation:")
+            let sentences = Platform.current.recommendation
+                .split(separator: ". ")
+                .map { $0.hasSuffix(".") ? String($0) : String($0) + "." }
+            for sentence in sentences {
+                CLI.out("  \(sentence)")
+            }
         }
         if conflicts.isEmpty {
             CLI.out("Conflicts: ✓ none detected")

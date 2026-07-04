@@ -17,18 +17,19 @@ struct CapController {
 
     // MARK: Direct SMC operations (must run as root for write)
 
-    /// Reads current cap value. Returns nil if SMC is unavailable or
-    /// the platform's cap key (BCLM on Intel, CHWA on Apple Silicon) is
-    /// missing.
+    /// Reads current cap value. Returns nil if SMC is unavailable, the
+    /// platform's cap key is missing, or the platform can't read caps
+    /// via SMC at all (e.g., appleSiliconNativeAPI should use native API).
     static func readCap() throws -> Int? {
+        // On platforms where SMC isn't the right path, don't even try.
+        guard let keyName = Platform.current.capKeyName else { return nil }
         try SMCKit.open()
         defer { _ = SMCKit.close() }
 
-        let platform = Platform.current
-        let key = SMCKit.getKey(platform.capKeyName, type: DataTypes.UInt8)
+        let key = SMCKit.getKey(keyName, type: DataTypes.UInt8)
         do {
             let bytes = try SMCKit.readData(key)
-            return platform.cap(fromSmcByte: bytes.0)
+            return Platform.current.cap(fromSmcByte: bytes.0)
         } catch SMCKit.SMCError.keyNotFound {
             return nil
         }
@@ -36,14 +37,19 @@ struct CapController {
 
     /// Writes cap = value (percentage). Must be called as root.
     /// Caller is responsible for validating value via Platform.isValid(cap:).
+    /// Will no-op (returns without error) on platforms without an SMC cap key.
     static func writeCap(value: Int) throws {
+        guard let keyName = Platform.current.capKeyName else {
+            // Native-API platform — silently ignore. CLI/UI should have
+            // prevented us from getting here.
+            return
+        }
         try SMCKit.open()
         defer { _ = SMCKit.close() }
 
-        let platform = Platform.current
-        let key = SMCKit.getKey(platform.capKeyName, type: DataTypes.UInt8)
+        let key = SMCKit.getKey(keyName, type: DataTypes.UInt8)
         var bytes = emptySMCBytes()
-        bytes.0 = platform.smcByte(forCap: value)
+        bytes.0 = Platform.current.smcByte(forCap: value)
         try SMCKit.writeData(key, data: bytes)
     }
 

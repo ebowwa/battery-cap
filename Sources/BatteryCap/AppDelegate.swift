@@ -41,9 +41,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var detectedConflicts: [ConflictDetector.Conflict] = []
     private var conflictCheckComplete: Bool = false  // false until first scan returns
 
-    // Sanity bounds. BCLM is documented 50..100; we cap UI at 80 because
-    // above 80 makes no sense for the calendar-aging use case.
-    private let capChoices: [Int] = [50, 60, 70, 80]
+    // Cap presets shown in the menu. Intel: 50/60/70/80. Apple Silicon:
+    // only 80 (CHWA can't hold intermediate values). Computed at runtime
+    // so the same universal binary adapts per platform.
+    private var capChoices: [Int] {
+        // Intel: full preset range.
+        // Apple Silicon (any variant): only 80% (100% = no cap = "Remove").
+        return Platform.current == .intelFull
+            ? [50, 60, 70, 80]
+            : [80]
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         monitor = BatteryMonitor()
@@ -119,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false  // We manage enabled state ourselves.
 
-        menu.addItem(withTitle: "BatteryCap",
+        menu.addItem(withTitle: "BatteryCap — \(Platform.current.shortLabel)",
                      action: nil, keyEquivalent: "").isEnabled = false
 
         // Conflict status row. Title is dynamically updated in refresh().
@@ -137,52 +144,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chargeItem.isEnabled = false
         chargeItem.tag = 100
 
-        let capItem = menu.addItem(withTitle: "Charge cap: …",
-                                   action: nil, keyEquivalent: "")
-        capItem.isEnabled = false
-        capItem.tag = 101
-
-        menu.addItem(.separator())
-
-        let targetHeader = menu.addItem(withTitle: "Set cap to:",
-                                        action: nil, keyEquivalent: "")
-        targetHeader.isEnabled = false
-
-        for value in capChoices {
-            let item = menu.addItem(withTitle: "\(value)%",
-                                    action: #selector(setCap(_:)),
-                                    keyEquivalent: "")
-            item.target = self
-            item.representedObject = value
-            item.tag = value
+        // Cap info row — only meaningful if SMC cap reading works.
+        if Platform.current.canControlChargeViaSMC {
+            let capItem = menu.addItem(withTitle: "Charge cap: …",
+                                       action: nil, keyEquivalent: "")
+            capItem.isEnabled = false
+            capItem.tag = 101
         }
 
-        // Free-form entry. Pre-fills with current_charge + 3 (clamped) for
-        // the fast proving test described in the README.
-        // On Apple Silicon, only 80/100 are valid — the dialog still works
-        // but rejects other values.
-        let customItem = menu.addItem(withTitle: "Set custom cap…",
-                                      action: #selector(setCustomCap),
-                                      keyEquivalent: "")
-        customItem.target = self
-        customItem.tag = 200
+        menu.addItem(.separator())
+
+        // Cap controls OR recommendation, depending on platform capability.
+        if Platform.current.canControlChargeViaSMC {
+            buildCapControlsMenu(into: menu)
+        } else {
+            buildRecommendationMenu(into: menu)
+        }
 
         menu.addItem(.separator())
 
-        let removeItem = menu.addItem(withTitle: "Remove cap (100%)",
-                                      action: #selector(removeCap(_:)),
-                                      keyEquivalent: "")
-        removeItem.target = self
+        // Persistence — only meaningful if SMC writes work.
+        if Platform.current.persistenceMakesSense {
+            let persistItem = menu.addItem(withTitle: "Persist on boot: …",
+                                           action: #selector(togglePersistence(_:)),
+                                           keyEquivalent: "")
+            persistItem.target = self
+            persistItem.tag = 102
 
-        menu.addItem(.separator())
-
-        let persistItem = menu.addItem(withTitle: "Persist on boot: …",
-                                       action: #selector(togglePersistence(_:)),
-                                       keyEquivalent: "")
-        persistItem.target = self
-        persistItem.tag = 102
-
-        menu.addItem(.separator())
+            menu.addItem(.separator())
+        }
 
         // Manual re-scan for conflicts. Useful after the user has resolved
         // a conflict (e.g., uninstalled AlDente) to confirm BatteryCap sees
@@ -200,6 +190,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
 
         return menu
+    }
+
+    /// Cap controls section — presets, custom dialog, remove.
+    /// Only called on platforms where SMC writes can work.
+    private func buildCapControlsMenu(into menu: NSMenu) {
+        let targetHeader = menu.addItem(withTitle: "Set cap to:",
+                                        action: nil, keyEquivalent: "")
+        targetHeader.isEnabled = false
+
+        for value in capChoices {
+            let item = menu.addItem(withTitle: "\(value)%",
+                                    action: #selector(setCap(_:)),
+                                    keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            item.tag = value
+        }
+
+        let customItem = menu.addItem(withTitle: "Set custom cap…",
+                                      action: #selector(setCustomCap),
+                                      keyEquivalent: "")
+        customItem.target = self
+        customItem.tag = 200
+
+        menu.addItem(.separator())
+
+        let removeItem = menu.addItem(withTitle: "Remove cap (set to 100%)",
+                                      action: #selector(removeCap(_:)),
+                                      keyEquivalent: "")
+        removeItem.target = self
+    }
+
+    /// Recommendation section — explains why cap controls are unavailable.
+    /// Shown on Apple Silicon macOS 15+ where SMC writes are blocked.
+    private func buildRecommendationMenu(into menu: NSMenu) {
+        let header = menu.addItem(withTitle: "⚠️ Cap control unavailable on this platform",
+                                  action: nil, keyEquivalent: "")
+        header.isEnabled = false
+
+        // NSMenuItem doesn't wrap; split the recommendation into sentence
+        // chunks so each fits on one line.
+        let sentences = Platform.current.recommendation
+            .split(separator: ". ")
+            .map { $0.hasSuffix(".") ? String($0) : String($0) + "." }
+        for sentence in sentences {
+            let item = menu.addItem(withTitle: sentence, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+        }
     }
 
     // MARK: Actions
@@ -257,7 +295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Platform-aware body text.
         let body: String
         switch Platform.current {
-        case .intel:
+        case .intelFull:
             body = """
                 Enter an integer from 50 to 100.
 
@@ -266,15 +304,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 Tip: set cap to current charge + 3 for the fastest plateau test.
                 """
-        case .appleSilicon:
+        case .appleSiliconPre15:
             body = """
-                Apple Silicon only supports 80% or 100% (no cap).
+                Apple Silicon (macOS <15) supports 80% or 100% only.
                 Enter 80 or 100.
 
                 Current charge: \(chargeStr)
-                Note: On macOS 15+, SMC charge keys may be entitlement-blocked.
-                If the write fails, use System Settings → Battery on macOS 26.4+.
                 """
+        case .appleSiliconBlocked, .appleSiliconNativeAPI:
+            // Should not be reachable — custom cap dialog only opens on
+            // canControlChargeViaSMC platforms. Defensive fallback.
+            body = Platform.current.recommendation
         }
         alert.informativeText = body
         alert.alertStyle = .informational
@@ -382,7 +422,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Status item title
         let chargeText = currentCharge >= 0 ? "\(currentCharge)%" : "—"
         let capText: String
-        if isApplyingCap, let pending = pendingCap {
+        if !Platform.current.canControlChargeViaSMC {
+            // Platform can't read/write SMC cap — show platform tag instead
+            // of misleading "cap ?" text.
+            capText = Platform.current.statusTag
+        } else if isApplyingCap, let pending = pendingCap {
             capText = "→ \(pending)%"
         } else if let cap = currentCap {
             capText = cap >= 100 ? "no cap" : "cap \(cap)%"
