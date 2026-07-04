@@ -159,6 +159,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Free-form entry. Pre-fills with current_charge + 3 (clamped) for
         // the fast proving test described in the README.
+        // On Apple Silicon, only 80/100 are valid — the dialog still works
+        // but rejects other values.
         let customItem = menu.addItem(withTitle: "Set custom cap…",
                                       action: #selector(setCustomCap),
                                       keyEquivalent: "")
@@ -251,14 +253,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = "Set custom charge cap"
         let chargeStr = currentCharge >= 0 ? "\(currentCharge)%" : "unknown"
         let overshoot = min(suggested + 3, 100)
-        alert.informativeText = """
-            Enter an integer from 50 to 100.
 
-            Current charge: \(chargeStr)
-            Suggested: \(suggested)% → battery will charge to ~\(overshoot)% (Intel firmware overshoots ~3%)
+        // Platform-aware body text.
+        let body: String
+        switch Platform.current {
+        case .intel:
+            body = """
+                Enter an integer from 50 to 100.
 
-            Tip: set cap to current charge + 3 for the fastest plateau test.
-            """
+                Current charge: \(chargeStr)
+                Suggested: \(suggested)% → battery will charge to ~\(overshoot)% (Intel firmware overshoots ~3%)
+
+                Tip: set cap to current charge + 3 for the fastest plateau test.
+                """
+        case .appleSilicon:
+            body = """
+                Apple Silicon only supports 80% or 100% (no cap).
+                Enter 80 or 100.
+
+                Current charge: \(chargeStr)
+                Note: On macOS 15+, SMC charge keys may be entitlement-blocked.
+                If the write fails, use System Settings → Battery on macOS 26.4+.
+                """
+        }
+        alert.informativeText = body
         alert.alertStyle = .informational
 
         let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
@@ -286,6 +304,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 BCLM is a UInt8 storing 0–100; values outside 50–100 are rejected \
                 to avoid deep-discharge risk (below 50) or no-op writes (above 100).
+                """
+            errAlert.addButton(withTitle: "OK")
+            errAlert.runModal()
+            return
+        }
+
+        // Platform-specific check: Apple Silicon only allows 80 or 100.
+        guard Platform.current.isValid(cap: value) else {
+            let errAlert = NSAlert()
+            errAlert.alertStyle = .warning
+            errAlert.messageText = "Unsupported on \(Platform.current.displayName)"
+            errAlert.informativeText = """
+                \(Platform.current.displayName) only supports: \
+                \(Platform.current.validCapValues.map { "\($0)%" }.joined(separator: ", ")).
+
+                CHWA is a binary toggle (1=80%, 0=100%) — Apple Silicon firmware \
+                cannot hold intermediate values.
                 """
             errAlert.addButton(withTitle: "OK")
             errAlert.runModal()

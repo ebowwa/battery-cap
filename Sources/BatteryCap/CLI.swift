@@ -260,15 +260,20 @@ enum SetCommand {
             CLI.err("Value must be 50..100, got \(value)")
             return EXIT_FAILURE
         }
+        // Platform-specific validation: Apple Silicon only allows 80 or 100.
+        guard Platform.current.isValid(cap: value) else {
+            CLI.err("\(Platform.current.displayName) only supports: \(Platform.current.validCapValues.map { "\($0)%" }.joined(separator: ", "))")
+            CLI.err("Got: \(value)%. CHWA is a binary 80%/100% toggle on Apple Silicon.")
+            return EXIT_FAILURE
+        }
         // Refuse if test mode is active — set would conflict with the test cap.
         if TestModeController.status() != nil {
             CLI.err("Test mode is active. Run 'batterycap test end' first.")
             return EXIT_FAILURE
         }
         do {
-            try CapController.writeCap(value: UInt8(value))
-            let bfcl = UInt8(max(value - 5, 50))
-            try? CapController.writeBFCL(value: bfcl)
+            try CapController.writeCap(value: value)
+            try? CapController.writeBFCL(value: max(value - 5, 50))
             _ = try? ConfigStore.write(cap: value)
             DiagnosticsLogger.log("[cli] set: value=\(value)%")
             if CLI.globalJSON {
@@ -295,7 +300,7 @@ enum ClearCommand {
         }
         do {
             try CapController.writeCap(value: 100)
-            try? CapController.writeBFCL(value: 95)
+            try? CapController.writeBFCL(value: 95)  // BFCL internally no-ops on Apple Silicon
             _ = try? ConfigStore.write(cap: 100)
             DiagnosticsLogger.log("[cli] clear: cap removed (set to 100)")
             if CLI.globalJSON {

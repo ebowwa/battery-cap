@@ -105,10 +105,20 @@ so a reviewer can read the entire codebase in 30 minutes.
 
 These are things we considered and **deliberately rejected** for v1.
 
-### NG1 — Apple Silicon support
-Apple Silicon uses `CHWA` (not `BCLM`), supports only 80 or 100, and has
-a different security model. Existing tooling (`batt`) handles this case
-well. BatteryCap stays Intel-only to keep the codebase focused.
+### NG1 — ~~Apple Silicon support~~ (RESCINDED in v0.5)
+**Original stance**: stay Intel-only because AS uses different SMC keys
+and batt already handles it.
+
+**Why rescinded**: user requested M-series support 2026-07-04. Codebase
+now compiles universal (arm64 + x86_64) and detects platform at runtime,
+using `BCLM` on Intel and `CHWA` on Apple Silicon.
+
+**Reality discovered during implementation**: on Apple Silicon macOS 15+,
+kernel entitlement enforcement blocks userland access to ALL charge-control
+SMC keys (verified via `--probe-smc` on M1 macOS 26.5: BCLM, CHWA, CH0B
+all return `keyNotFound`). The code path exists but cannot function on
+modern AS macOS. See §6 "Apple Silicon reality" and the new OQ8 (native
+API integration) for the path forward.
 
 ### NG2 — macOS 15+ support
 Kernel entitlement enforcement in macOS 15 blocks userspace SMC writes
@@ -216,9 +226,51 @@ useful secondary signal — but that doesn't apply to A1706 and shouldn't
 be relied on as a test criterion.
 
 ### Known-incompatible
-- Any Apple Silicon Mac (different SMC key `CHWA`, different security model)
+- macOS 15–26.3 on Apple Silicon (kernel entitlement block — verified via
+  `--probe-smc` on M1 macOS 26.5: BCLM, CHWA, CH0B all return `keyNotFound`)
 - Pre-2012 Intel Macs (different SMC firmware; may work but untested)
 - macOS 15+ on any Intel Mac (kernel entitlement block, per bclm README)
+
+### Apple Silicon reality (verified on M1 macOS 26.5)
+
+```
+$ batterycap --probe-smc
+Platform: Apple Silicon
+SMC key probe:
+  ❌ BCLM not found
+  ❌ CHWA not found
+  ❌ BFCL not found
+  ❌ CH0B not found
+  ✅ BRSC = 10  (informational only — not a charge-control key)
+  ⚠️  TB0T error: kIOReturn=0, SMCResult=135  (privilege-gated)
+```
+
+All charge-control keys return `keyNotFound`. BRSC (read-only state of charge)
+reads fine because it's informational, not a control. This pattern — every
+control key gated, every informational key readable — is consistent with
+deliberate Apple lockdown, not accidental missing keys.
+
+**Implications by macOS version on Apple Silicon:**
+
+| macOS version | Charge-control path | Recommendation |
+| --- | --- | --- |
+| 12 Monterey and older | `CHWA` SMC write *should* work | BatteryCap may work; untested |
+| 13 Ventura, 14 Sonoma | `CHWA` SMC write *should* work | BatteryCap may work; untested |
+| 15 Sequoia – 26.3 | Entitlement-blocked | No userland solution exists |
+| 26.4+ | Native API (`pmset chlim` / System Settings) | Use native, not BatteryCap |
+
+BatteryCap's Apple Silicon code path is correct (compiles, validates per-platform,
+handles CHWA's binary semantics) but functionally limited on modern macOS.
+v0.6 will add native-API integration for macOS 26.4+ AS (see OQ8).
+
+### Likely-compatible but untested
+- **Apple Silicon macOS 13–14**: `CHWA` writes may work. Pre-entitlement era.
+- **Intel MacBook Pro Retina 13"/15" (A1502/A1398, 2013–2015)**: MagSafe 2 era,
+  BFCL controls the LED indicator. Code path identical to A1706.
+- **Intel MacBook Pro 13"/15" with Touch Bar (A1707, 2016–2017)**: same
+  generation as A1706, just larger.
+- **Intel MacBook Pro 13" Function Keys (A1708, 2016–2017)**: same generation,
+  no Touch Bar.
 
 ### Likely-compatible but untested
 - MacBook Pro Retina 13"/15" (A1502/A1398, 2013–2015) — MagSafe 2 era,
@@ -338,6 +390,18 @@ be relied on as a test criterion.
 | FR62 | All existing `--read`/`--write`/`--boot-apply` modes preserved for LaunchDaemon + osascript |
 | FR63 | `version` subcommand (and `--version`) prints version                  |
 | FR64 | `log show [-n N]` tails drift log; `log grep PATTERN` filters it       |
+| FR65 | `--probe-smc` diagnostic lists which SMC charge keys are accessible (for debugging entitlement lockdown) |
+
+### Platform abstraction (v0.5)
+| ID  | Requirement                                                            |
+| --- | --------------------------------------------------------------------- |
+| FR66 | Universal binary: single .app runs on both arm64 and x86_64            |
+| FR67 | `Platform.current` resolves at compile time via `#if arch(arm64)`/`arch(x86_64)` |
+| FR68 | Intel platform uses `BCLM` key, 50–100% continuous values              |
+| FR69 | Apple Silicon platform uses `CHWA` key, binary 80% (=1) or 100% (=0)   |
+| FR70 | UI hides unsupported presets on AS (only "80%" shown, no 50/60/70)     |
+| FR71 | Custom cap dialog rejects values not in `Platform.validCapValues` with platform-specific error |
+| FR72 | `bootApply` validates saved cap against current platform before writing (handles Intel→AS migration edge case) |
 
 ---
 
@@ -734,6 +798,12 @@ These are things we haven't decided about yet. None block v1.0.
 - **OQ6**: When this gets folded into a larger macOS app, does BatteryCap
   become a feature flag, a submodule, or a fully merged module? Affects
   how we structure the code now.
+- **OQ8** (new in v0.5): Should BatteryCap integrate the macOS 26.4+ native
+  charge limit API for Apple Silicon? The SMC path is dead on AS macOS 15+;
+  native is the only viable AS solution. Would mean: detect macOS version +
+  arch, route to BCLM (Intel) / CHWA (AS pre-15) / native (AS 26.4+). Three
+  code paths, more complexity, but actually functional on modern AS Macs.
+  Defer to v0.6 unless user pressure.
 
 ---
 
@@ -865,6 +935,7 @@ BatteryCap stands on the shoulders of:
 | 0.3     | 2026-07-03 | @ebowwa | Addressed OQ1: periodic re-apply (hourly) with drift logging to /Library/Logs/BatteryCap.log. Added FR40-FR45, NFR19-NFR20. Revisit removal after 30 days of log evidence. |
 | 0.4     | 2026-07-03 | @ebowwa | Addressed OQ3: non-persistent test mode + first-class CLI for Claude-driven management. Added FR46-FR64. Raised NFR13 to 3000 LOC. |
 | 0.4.1   | 2026-07-03 | @ebowwa | Honesty pass: README "Confirmed against" was an overclaim (we targeted A1706, never tested on it). Split §6 into Reported behavior (third-party cites) / Self-validated (M1 dev) / Pending Intel target. README compatibility section restructured the same way. No code changes. |
+| 0.5     | 2026-07-04 | @ebowwa | Apple Silicon support (rescinds NG1). New Platform.swift abstracts arch detection; CapController uses BCLM (Intel) / CHWA (AS) per platform. Universal binary build via `--arch arm64 --arch x86_64`. UI hides unsupported presets on AS. New `--probe-smc` diagnostic. **Discovery**: entitlement lockdown on AS macOS 15+ means CHWA path is non-functional there (verified via probe). Added OQ8 for native-API integration (macOS 26.4+ AS). |
 
 ## 21. Research findings incorporated (v0.4)
 

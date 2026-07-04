@@ -24,44 +24,75 @@ to deliver power. See [Battery University BU-808](https://batteryuniversity.com/
 
 ## Compatibility
 
-| macOS version           | Status            | Notes                                              |
-| ----------------------- | ----------------- | -------------------------------------------------- |
-| 12 Monterey and older   | Should work       | Untested but the SMC path is well-trodden          |
-| 13 Ventura, 14 Sonoma   | Target platforms  | BCLM writes should succeed; binary may need Gatekeeper bypass |
-| 15 Sequoia and newer    | Broken            | Kernel entitlement enforcement blocks SMC writes   |
-| Apple Silicon (any)     | Not supported     | Uses `CHWA`, only 80 / 100 — out of scope here      |
+| macOS version           | Intel Macs                     | Apple Silicon Macs                       |
+| ----------------------- | ------------------------------ | ---------------------------------------- |
+| 12 Monterey and older   | Should work (BCLM, untested)   | Should work (CHWA, untested)             |
+| 13 Ventura, 14 Sonoma   | Target platforms (BCLM)        | Should work (CHWA, untested)             |
+| 15 Sequoia – 26.3       | Broken (entitlement block)     | Broken (entitlement block)               |
+| 26.4+                   | N/A (Intel caps here)          | Use **native** charge limit, not BatteryCap |
 
-**Targeted for**: MacBook Pro A1706 (13" with Touch Bar, 2016–2017) with
-`bq20z451` gauge chip. The Intel target is being reset to fresh install;
-validation runs against `docs/PRD.md` §18 once it's back up.
+**Targeted for**:
+- **Intel MacBooks** (2012–2017): A1706/A1707/A1708 (Touch Bar, USB-C) and
+  A1502/A1398 (Retina, MagSafe 2). Uses SMC `BCLM` key, 50–100% continuous.
+- **Apple Silicon MacBooks** (M1+): uses SMC `CHWA` key, binary 80%/100% toggle.
+  **However**: on macOS 15+, kernel entitlement enforcement blocks userland
+  access to charge-control SMC keys. See "Apple Silicon reality" below.
 
-**Likely compatible** (third-party reports, not self-tested): broader
-2012–2017 Intel MBP range (A1502/A1398 Retina, A1707/A1708 Touch Bar
-generation) — same SMC key family, same gauge chip era.
+### Apple Silicon reality (verified on M1 macOS 26.5)
+
+```
+$ batterycap --probe-smc
+Platform: Apple Silicon
+SMC key probe:
+  ❌ BCLM not found
+  ❌ CHWA not found
+  ❌ BFCL not found
+  ❌ CH0B not found
+  ✅ BRSC = 10  (Battery Relative State of Charge — informational only)
+  ⚠️  TB0T error: unknown(kIOReturn: 0, SMCResult: 135)  (privilege-gated)
+```
+
+**All charge-control keys (BCLM, CHWA, CH0B) return `keyNotFound` on Apple
+Silicon macOS 15+.** This is the entitlement lockdown documented in bclm's
+README: *"BCLM does not work on macOS >= 15.0 due to new entitlement
+enforcement from the kernel that cannot be circumvented without disabling SIP."*
+Same applies to CHWA.
+
+Practical implications:
+- **macOS 26.4+ Apple Silicon**: use the native charge limit in System Settings →
+  Battery → Charge Limit (80–100%). Don't use BatteryCap. The native API is better.
+- **macOS 13–14 Apple Silicon**: BatteryCap's CHWA path *may* still work
+  (bclm-era docs suggest it did). Untested in this codebase.
+- **macOS 15–26.3 Apple Silicon**: no solution. Neither BatteryCap nor any other
+  userland tool can write SMC charge keys. Apple broke this on purpose.
+
+BatteryCap's Apple Silicon code path exists for completeness and for older
+macOS versions; on modern macOS, it will report "cap not set" because the
+read returns `keyNotFound`. That's accurate, not a bug.
 
 ### What IS validated (on M1 dev, macOS 26.5)
 
 - ✅ Compiles cleanly (Swift 6.3, Xcode 26.5)
+- ✅ Universal binary builds (arm64 + x86_64 via `--arch` flag)
 - ✅ CLI works end-to-end: `status`, `get`, `version`, `conflicts`, `test status`, `help`
 - ✅ `--json` output is valid JSON (parseable by Claude/scripts)
 - ✅ `ConflictDetector` returns expected tri-state on macOS 26.5
-  ("OBC unknown" because Apple moved the flag out of `pmset -g`)
-- ✅ Menu bar UI launches, async paths (conflict detection, refresh) don't crash
+- ✅ Menu bar UI launches, async paths don't crash
 - ✅ Exit codes correct (0 success / 1 generic / 77 EX_NOPERM)
+- ✅ Platform detection: `Platform.current` resolves correctly on both archs
+- ✅ `--probe-smc` diagnostic correctly reports which SMC keys are accessible
 
-### What is NOT yet validated (pending Intel target)
+### What is NOT yet validated
 
-- ❌ Actual `BCLM` write — M1 uses `CHWA`, not `BCLM`; we can't test the write path here
-- ❌ `BFCL` write (or its silent absence on USB-C Macs)
+- ❌ Actual `BCLM` write (Intel target — pending A1706 reset completion)
+- ❌ `CHWA` write on Apple Silicon macOS 13–14 (older firmware, untested)
+- ❌ `BFCL` write (Intel-only)
 - ❌ Test mode end-to-end (write → background-reverter → restore cycle)
 - ❌ LaunchDaemon `RunAtLoad` + `StartInterval=3600` actually fires
 - ❌ `ConflictDetector` on macOS 13/14 where `pmset -g` does expose OBC
 - ❌ Long-running cap hold (hours / days / across reboot)
 - ❌ `osascript ... with administrator privileges` path from the menu bar UI
-- ❌ The `nohup+sleep+CMD` reverter survives parent exit on Intel macOS
-
-The M1 dev machine cannot test any of the SMC-write paths. Only the Intel
-target can. Don't claim "works on A1706" until those tests have run.
+- ❌ `nohup+sleep+CMD` reverter survives parent exit on Intel macOS
 
 > ⚠️ **A1706 has no MagSafe LED.** Don't rely on visual charging feedback.
 > Confirm the cap is working via `pmset -g batt` (shows "AC Power; not

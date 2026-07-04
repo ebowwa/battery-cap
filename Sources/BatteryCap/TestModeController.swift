@@ -76,12 +76,23 @@ enum TestModeController {
         let testValue: Int
         if let v = explicitValue {
             guard (50...100).contains(v) else { throw Error.invalidValue(v) }
+            // Apple Silicon constraint: CHWA is binary, only 80 or 100 valid.
+            guard Platform.current.isValid(cap: v) else {
+                throw Error.invalidValue(v)
+            }
             testValue = v
         } else {
-            // Default: current charge + 3, clamped to 50..100.
+            // Default: current charge + 3, clamped to 50..100, then clamped
+            // to a valid platform value (Apple Silicon: 80 or 100).
             let charge = BatteryMonitor().currentChargePercent()
-            let target = charge >= 0 ? charge + 3 : 60
-            testValue = min(max(target, 50), 100)
+            let rawTarget = charge >= 0 ? charge + 3 : 60
+            let intTarget = min(max(rawTarget, 50), 100)
+            if Platform.current.isValid(cap: intTarget) {
+                testValue = intTarget
+            } else {
+                // On Apple Silicon, snap to nearest valid (80 if intTarget<90, else 100).
+                testValue = intTarget < 90 ? 80 : 100
+            }
         }
 
         // Capture original cap (what we'll restore to).
@@ -90,8 +101,8 @@ enum TestModeController {
         // Write test cap to SMC. ConfigStore is NOT touched — that's the
         // whole point of "non-persistent."
         do {
-            try CapController.writeCap(value: UInt8(testValue))
-            try? CapController.writeBFCL(value: UInt8(max(testValue - 5, 50)))
+            try CapController.writeCap(value: testValue)
+            try? CapController.writeBFCL(value: max(testValue - 5, 50))
         } catch {
             throw Error.writeFailed("\(error)")
         }
@@ -133,8 +144,8 @@ enum TestModeController {
 
         // Restore original cap to SMC.
         do {
-            try CapController.writeCap(value: UInt8(state.originalCap))
-            try? CapController.writeBFCL(value: UInt8(max(state.originalCap - 5, 50)))
+            try CapController.writeCap(value: state.originalCap)
+            try? CapController.writeBFCL(value: max(state.originalCap - 5, 50))
         } catch {
             throw Error.writeFailed("\(error)")
         }

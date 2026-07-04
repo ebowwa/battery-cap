@@ -15,13 +15,23 @@ BINARY_NAME="BatteryCap"
 
 cd "$ROOT_DIR"
 
-echo "==> Building (release)..."
-swift build -c release
+echo "==> Building (release, universal binary)..."
+# Universal binary: contains both arm64 (Apple Silicon) and x86_64 (Intel).
+# One .app runs natively on both architectures — no separate builds needed.
+swift build -c release --arch arm64 --arch x86_64
 
 BUILT_BIN="$ROOT_DIR/.build/release/$BINARY_NAME"
 if [[ ! -f "$BUILT_BIN" ]]; then
     echo "ERROR: build did not produce $BUILT_BIN" >&2
     exit 1
+fi
+
+# Verify universal.
+echo "==> Binary arch:"
+file "$BUILT_BIN"
+if ! file "$BUILT_BIN" | grep -q "universal"; then
+    echo "WARNING: binary is not universal. Will only run on one arch."
+    echo "To fix: install Xcode with both iOS + macOS SDK components."
 fi
 
 echo "==> Packaging into $APP_PATH..."

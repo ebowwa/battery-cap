@@ -17,41 +17,47 @@ struct CapController {
 
     // MARK: Direct SMC operations (must run as root for write)
 
-    /// Reads current BCLM value. Returns nil if SMC is unavailable or
-    /// the key is missing on this hardware.
+    /// Reads current cap value. Returns nil if SMC is unavailable or
+    /// the platform's cap key (BCLM on Intel, CHWA on Apple Silicon) is
+    /// missing.
     static func readCap() throws -> Int? {
         try SMCKit.open()
         defer { _ = SMCKit.close() }
 
-        let key = SMCKit.getKey("BCLM", type: DataTypes.UInt8)
+        let platform = Platform.current
+        let key = SMCKit.getKey(platform.capKeyName, type: DataTypes.UInt8)
         do {
             let bytes = try SMCKit.readData(key)
-            return Int(bytes.0)
+            return platform.cap(fromSmcByte: bytes.0)
         } catch SMCKit.SMCError.keyNotFound {
             return nil
         }
     }
 
-    /// Writes BCLM = value. Must be called as root.
-    static func writeCap(value: UInt8) throws {
+    /// Writes cap = value (percentage). Must be called as root.
+    /// Caller is responsible for validating value via Platform.isValid(cap:).
+    static func writeCap(value: Int) throws {
         try SMCKit.open()
         defer { _ = SMCKit.close() }
 
-        let key = SMCKit.getKey("BCLM", type: DataTypes.UInt8)
+        let platform = Platform.current
+        let key = SMCKit.getKey(platform.capKeyName, type: DataTypes.UInt8)
         var bytes = emptySMCBytes()
-        bytes.0 = value
+        bytes.0 = platform.smcByte(forCap: value)
         try SMCKit.writeData(key, data: bytes)
     }
 
-    /// Writes BFCL = value. Best-effort: ignored if the key doesn't exist
-    /// (USB-C Macs without charging LEDs).
-    static func writeBFCL(value: UInt8) throws {
+    /// Writes BFCL = value. Intel-only — Apple Silicon never has BFCL.
+    /// Best-effort: ignored if the key doesn't exist (USB-C Macs without
+    /// charging LEDs).
+    static func writeBFCL(value: Int) throws {
+        guard Platform.current.supportsBFCL else { return }
         try SMCKit.open()
         defer { _ = SMCKit.close() }
 
         let key = SMCKit.getKey("BFCL", type: DataTypes.UInt8)
         var bytes = emptySMCBytes()
-        bytes.0 = value
+        bytes.0 = UInt8(value)
         try SMCKit.writeData(key, data: bytes)
     }
 
@@ -173,6 +179,16 @@ struct CapController {
             return EXIT_SUCCESS
         }
 
+        // Validate target is acceptable on this platform before writing.
+        // (User could have set 60 on Intel, then config file ended up on
+        // an Apple Silicon Mac via migration. Don't write a wrong value.)
+        guard Platform.current.isValid(cap: target) else {
+            DiagnosticsLogger.log(
+                "[up \(uptime)s] scheduled-apply: target=\(target) invalid on \(Platform.current.displayName) (valid: \(Platform.current.validCapValues)), skipping"
+            )
+            return EXIT_SUCCESS
+        }
+
         // 4. Drift detected (cap missing, wrong value, or SMC reset).
         //    Write the corrective value + BFCL.
         DiagnosticsLogger.log(
@@ -180,8 +196,8 @@ struct CapController {
         )
 
         do {
-            try writeCap(value: UInt8(target))
-            try? writeBFCL(value: UInt8(max(target - 5, 50)))
+            try writeCap(value: target)
+            try? writeBFCL(value: max(target - 5, 50))
         } catch {
             DiagnosticsLogger.log(
                 "[up \(uptime)s] scheduled-apply: target=\(target) correct_error=\(error)"
