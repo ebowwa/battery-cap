@@ -82,6 +82,16 @@ if args.count >= 2 {
         }
         exit(EXIT_SUCCESS)
 
+    case "--log-test":
+        // Writes a synthetic test entry to the log so users can verify
+        // logging works end-to-end without waiting for an hour. Also
+        // prints the path so they know where to look.
+        // Needs root (writes to /Library/Logs/).
+        DiagnosticsLogger.log("[manual] log-test: synthetic entry for verification")
+        print("Wrote test entry to: \(DiagnosticsLogger.logPath)")
+        print("Tail with: sudo tail -f \(DiagnosticsLogger.logPath)")
+        exit(EXIT_SUCCESS)
+
     default:
         // Fall through to UI mode for unknown args (let the app show its menu).
         break

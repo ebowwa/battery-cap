@@ -272,6 +272,16 @@ be relied on as a test criterion.
 | FR38 | Detail dialog lists each conflict with title + remediation hint         |
 | FR39 | When OBC status is unknown, surface as "manual verify" hint (not silent, not false) |
 
+### Periodic re-apply (OQ1 experiment)
+| ID  | Requirement                                                            |
+| --- | --------------------------------------------------------------------- |
+| FR40 | LaunchDaemon runs binary with `--boot-apply` every 3600s via `StartInterval` |
+| FR41 | Each invocation reads current BCLM, logs target vs actual with uptime, corrects drift if detected, verifies |
+| FR42 | Logs to `/Library/Logs/BatteryCap.log` with ISO8601 timestamps, rotates at 1MB, keeps 3 archives |
+| FR43 | `--log-test` CLI mode writes synthetic entry for end-to-end verification |
+| FR44 | On drift detection, write corrective BCLM + BFCL value, then re-read to verify |
+| FR45 | Log structured fields (`target=`, `actual=`, `drift=`, `verify=`, `effective=`) for grep-friendly analysis |
+
 ---
 
 ## 8. Non-Functional Requirements
@@ -309,6 +319,8 @@ be relied on as a test criterion.
 | NFR16 | Conflict detection must never produce false positives (verified absence required before claiming "clean") |
 | NFR17 | Conflict detection completes in < 500ms (currently ~150ms)  |
 | NFR18 | Unknown detection state is reported as "manual verify", never as "off" |
+| NFR19 | Periodic check (hourly) must add < 1% to daily battery drain via launchd wakeups |
+| NFR20 | Log file must be world-readable (644) so users can inspect without sudo |
 
 ---
 
@@ -632,9 +644,16 @@ unknown — never false-positive or false-negative. See §7 FR27-FR34 and
 
 These are things we haven't decided about yet. None block v1.0.
 
-- **OQ1**: Should we re-apply the cap periodically (hourly cron) as
-  defense-in-depth against silent SMC resets? Currently relying on
-  boot-only re-application.
+- **OQ1**: ~~Should we re-apply the cap periodically (hourly cron) as
+  defense-in-depth against silent SMC resets?~~ **SHIPPED in v0.2 as
+  evidence-gathering experiment.** LaunchDaemon now runs hourly via
+  `StartInterval=3600`. Each invocation reads current BCLM, logs the
+  comparison with system uptime, corrects drift if detected, and logs
+  the post-correction verify read. Log at `/Library/Logs/BatteryCap.log`.
+  **Revisit in 30 days** based on log evidence: if `drift=true` count is
+  zero, remove the periodic check (it's pure overhead). If drift is rare
+  (weekly), extend interval to daily. If drift is common (hourly), we
+  have a bigger problem worth investigating. See §7 FR40-FR42, §8 NFR19.
 - **OQ2**: ~~Should the menu bar item show MagSafe LED state for additional
   confidence?~~ **Moot for A1706** (no LED to read). Would only matter if
   extending support to A1502/A1398 (2013–2015 Retina). Defer unless those
@@ -778,6 +797,7 @@ BatteryCap stands on the shoulders of:
 | ------- | ---------- | ------- | -------------------------------- |
 | 0.1     | 2026-07-03 | @ebowwa | Initial PRD. Covers v0.1 shipped.|
 | 0.2     | 2026-07-03 | @ebowwa | Promoted R7 mitigation from v1.1 to v0.1 (ConflictDetector shipped). Added FR27-FR39, NFR16-NFR18. |
+| 0.3     | 2026-07-03 | @ebowwa | Addressed OQ1: periodic re-apply (hourly) with drift logging to /Library/Logs/BatteryCap.log. Added FR40-FR45, NFR19-NFR20. Revisit removal after 30 days of log evidence. |
 
 ---
 

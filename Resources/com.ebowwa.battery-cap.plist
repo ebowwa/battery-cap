@@ -22,7 +22,12 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- Don't restart if it exits — we only want it to run once per boot. -->
+    <!-- Defense-in-depth: re-apply hourly. Logs to /Library/Logs/BatteryCap.log
+         so we can decide later whether this is needed. See PRD OQ1. -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <!-- Don't restart if it exits — short-lived process, runs and exits. -->
     <key>KeepAlive</key>
     <false/>
 </dict>

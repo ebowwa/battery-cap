@@ -92,9 +92,16 @@ struct PersistenceInstaller {
         }
     }
 
-    /// Generates the LaunchDaemon plist XML. The plist runs the binary with
-    /// `--boot-apply` at load time, which reads the config file and applies
-    /// the saved cap.
+    /// Generates the LaunchDaemon plist XML.
+    ///
+    /// Scheduling:
+    /// - RunAtLoad=true: runs once at boot (or whenever launchd loads it).
+    /// - StartInterval=3600: runs every hour after that.
+    /// - KeepAlive=false: process exits between invocations (no memory pressure).
+    ///
+    /// Both RunAtLoad and StartInterval invoke the same `--boot-apply` argv.
+    /// Inside the binary, system uptime disambiguates the two contexts in
+    /// the log — boot invocations have small uptimes, periodic ones large.
     private static func generatePlist(binaryPath: String) -> String {
         return """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -110,6 +117,8 @@ struct PersistenceInstaller {
             </array>
             <key>RunAtLoad</key>
             <true/>
+            <key>StartInterval</key>
+            <integer>3600</integer>
             <key>KeepAlive</key>
             <false/>
         </dict>

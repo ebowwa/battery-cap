@@ -83,6 +83,8 @@ if [[ "${1:-}" == "--persist" ]]; then
     </array>
     <key>RunAtLoad</key>
     <true/>
+    <key>StartInterval</key>
+    <integer>3600</integer>
     <key>KeepAlive</key>
     <false/>
 </dict>
@@ -101,6 +103,9 @@ PLIST
         sudo chmod 644 "$CONF_PATH"
     fi
 
+    # Upgrade-safe load: bootout first if the v0.1 daemon is already loaded
+    # with the old plist (no StartInterval), then bootstrap the new one.
+    sudo launchctl bootout system/com.ebowwa.battery-cap 2>/dev/null || true
     sudo launchctl bootstrap system/com.ebowwa.battery-cap "$PLIST_PATH" 2>/dev/null \
         || sudo launchctl load -w "$PLIST_PATH"
 

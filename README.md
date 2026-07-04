@@ -140,7 +140,59 @@ Rare, but possible causes:
 
 # Check current BCLM value:
 sudo /Applications/BatteryCap.app/Contents/MacOS/BatteryCap --read
+
+# Write a synthetic test entry to the log:
+sudo /Applications/BatteryCap.app/Contents/MacOS/BatteryCap --log-test
 ```
+
+### Periodic re-apply (defense-in-depth)
+
+The LaunchDaemon doesn't just run at boot — it also runs hourly via
+`StartInterval=3600` to catch silent drift (e.g., if another tool
+temporarily overwrites BCLM, or an SMC reset wipes it).
+
+Every invocation logs to **`/Library/Logs/BatteryCap.log`** with structured
+fields so we can decide later whether the hourly check is worth keeping.
+
+```sh
+# Watch the log in real time:
+sudo tail -f /Library/Logs/BatteryCap.log
+
+# Count drift events in the last week:
+sudo grep "drift=true" /Library/Logs/BatteryCap.log | wc -l
+
+# See only the corrective actions:
+sudo grep "corrected" /Library/Logs/BatteryCap.log
+```
+
+#### Log line format
+
+```
+2026-07-03T16:45:00Z [up 12s] scheduled-apply: target=60 actual=60 drift=false
+2026-07-03T17:45:00Z [up 3612s] scheduled-apply: target=60 actual=100 drift=true correcting
+2026-07-03T17:45:00Z [up 3612s] scheduled-apply: target=60 corrected verify=60 effective=yes
+```
+
+- **`[up Ns]`** — system uptime in seconds. Small values = boot invocation;
+  large values = periodic. Lets you tell which from the log.
+- **`target=`** — the cap value saved in `/usr/local/etc/battery-cap.conf`.
+- **`actual=`** — what BCLM was when we read it.
+- **`drift=true/false`** — whether we detected a mismatch.
+- **`verify=`** — post-correction read-back (only present if we wrote).
+- **`effective=yes/no`** — did the corrective write actually take?
+
+#### When to remove the periodic check
+
+After ~30 days of logs, evaluate:
+
+| Drift frequency | Recommended action |
+| --- | --- |
+| 0 events in 30 days | Remove `StartInterval` from plist (it's pure overhead) |
+| < 5 events, all explained | Keep hourly, document the patterns |
+| Weekly drift | Switch to daily `StartInterval=86400` |
+| Hourly drift | Something else is fighting BatteryCap — see Troubleshooting |
+
+This is intentionally an experiment. We'd rather measure than guess.
 
 ### Reporting a bug
 

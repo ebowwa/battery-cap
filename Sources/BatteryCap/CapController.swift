@@ -117,22 +117,70 @@ struct CapController {
 
     // MARK: LaunchDaemon entry point (--boot-apply)
 
-    /// Reads cap from ConfigStore and applies it. Used by the LaunchDaemon
-    /// on boot. Returns the exit code (0 = success).
+    /// Reads saved cap from ConfigStore, reads current BCLM, logs the
+    /// comparison, writes corrective value if drifted, verifies.
+    ///
+    /// Invoked by LaunchDaemon at boot (RunAtLoad=true) and every hour
+    /// (StartInterval=3600). The same code path handles both — log line
+    /// includes system uptime so you can tell which is which in the log:
+    /// boot invocations have small uptimes, periodic ones large.
+    ///
+    /// Returns exit code (0 = success). Failures don't crash; launchd
+    /// would back off exponentially.
     static func bootApply() -> Int32 {
-        guard let cap = try? ConfigStore.read(), (50...100).contains(cap) else {
-            // No config or invalid → nothing to do. Don't fail; LaunchDaemon
-            // would back off exponentially.
+        let uptime = Int(ProcessInfo.processInfo.systemUptime)
+
+        // 1. Read the saved target cap.
+        guard let target = try? ConfigStore.read(), (50...100).contains(target) else {
+            DiagnosticsLogger.log(
+                "[up \(uptime)s] scheduled-apply: no config or invalid, skipping"
+            )
             return EXIT_SUCCESS
         }
+
+        // 2. Read current BCLM to detect drift.
+        let actual: Int?
         do {
-            try writeCap(value: UInt8(cap))
-            try? writeBFCL(value: UInt8(max(cap - 5, 50)))
-            return EXIT_SUCCESS
+            actual = try readCap()
         } catch {
-            FileHandle.standardError.write(
-                "boot-apply failed: \(error)\n".data(using: .utf8)!)
+            DiagnosticsLogger.log(
+                "[up \(uptime)s] scheduled-apply: target=\(target) read_error=\(error)"
+            )
             return EXIT_FAILURE
         }
+
+        // 3. Happy path — cap already correct, no write needed. This is
+        // the most common case for periodic invocations.
+        if actual == target {
+            DiagnosticsLogger.log(
+                "[up \(uptime)s] scheduled-apply: target=\(target) actual=\(actual ?? -1) drift=false"
+            )
+            return EXIT_SUCCESS
+        }
+
+        // 4. Drift detected (cap missing, wrong value, or SMC reset).
+        //    Write the corrective value + BFCL.
+        DiagnosticsLogger.log(
+            "[up \(uptime)s] scheduled-apply: target=\(target) actual=\(actual ?? -1) drift=true correcting"
+        )
+
+        do {
+            try writeCap(value: UInt8(target))
+            try? writeBFCL(value: UInt8(max(target - 5, 50)))
+        } catch {
+            DiagnosticsLogger.log(
+                "[up \(uptime)s] scheduled-apply: target=\(target) correct_error=\(error)"
+            )
+            return EXIT_FAILURE
+        }
+
+        // 5. Verify the correction took effect by re-reading.
+        let verify = (try? readCap()) ?? -1
+        let effective = verify == target ? "yes" : "no"
+        DiagnosticsLogger.log(
+            "[up \(uptime)s] scheduled-apply: target=\(target) corrected verify=\(verify) effective=\(effective)"
+        )
+
+        return verify == target ? EXIT_SUCCESS : EXIT_FAILURE
     }
 }
