@@ -161,18 +161,48 @@ sensor reading, etc.).
 - **macOS in practice**: user is reinstalling macOS 13 Ventura or 14 Sonoma
   (Sonoma on A1706 requires OpenCore Legacy Patcher)
 
-### Verified behavior on this generation
-- ✅ `BCLM` key exists and accepts writes (multiple user reports on r/mac,
-  Hacker News, MacRumors confirm successful charge limiting on 2016–2019
-  Intel MBPs with Touch Bar)
-- ❌ `BFCL` key likely doesn't exist or is meaningless — there is no MagSafe
-  LED on USB-C Macs for it to control. The
+### Reported behavior on this generation (third-party sources, NOT self-tested)
+- ✅ `BCLM` key exists and accepts writes — per user reports on r/mac,
+  Hacker News, and the
   [MacRumors SMC thread](https://forums.macrumors.com/threads/2439923/)
-  documents BFCL as absent on pre-Core iX Macs; for USB-C Core iX Macs the
-  key is technically present but has no hardware effect.
-- 🔌 Related SMC keys observed on this generation (not used by BatteryCap v1):
+  for 2016–2019 Intel MBPs with Touch Bar
+- ❌ `BFCL` key likely doesn't exist or is meaningless — there is no MagSafe
+  LED on USB-C Macs for it to control. Same MacRumors thread documents BFCL
+  as absent on pre-Core iX Macs; for USB-C Core iX Macs the key is
+  technically present but has no hardware effect.
+- 🔌 Related SMC keys reported on this generation (not used by BatteryCap v1):
   `CH0B` (charge control: 00 = allow, 02 = inhibit), `BRSC` (charge level
   reading). Documented for future work in §15 OQ7.
+
+### Self-validated behavior (on M1 dev, macOS 26.5)
+
+What we have actually tested ourselves, as of v0.4:
+
+- ✅ Compiles cleanly (Swift 6.3, Xcode 26.5)
+- ✅ CLI works: `status`, `get`, `version`, `conflicts`, `test status`, `help`
+- ✅ `--json` output is valid JSON
+- ✅ `ConflictDetector` returns expected tri-state ("OBC unknown" on macOS 26.5)
+- ✅ Menu bar UI launches, async detection + refresh don't crash
+- ✅ Exit codes correct (0 / 1 / 77)
+- ✅ `CapController.readCap` returns `nil` cleanly on M1 (BCLM key absent —
+  expected, not a bug)
+
+### Pending Intel target validation
+
+What is NOT yet tested and must be verified on A1706 before v1.0 release:
+
+- ❌ Actual `BCLM` write (the core feature)
+- ❌ `BFCL` write (or its silent absence via `try?`)
+- ❌ Test mode end-to-end (write → nohup+sleep+CMD reverter → restore)
+- ❌ LaunchDaemon `RunAtLoad` + `StartInterval=3600` actually fires on schedule
+- ❌ `ConflictDetector` on macOS 13/14 (where `pmset -g` should expose OBC)
+- ❌ Long-running cap hold (hours / overnight / across reboot)
+- ❌ `osascript ... with administrator privileges` from the menu bar UI
+- ❌ The `nohup` reverter survives parent exit on Intel macOS
+
+This list gates v1.0 (see §16 Roadmap). PRD claims that read "should work"
+or "likely compatible" refer to the Reported behavior section above — they
+are third-party attestations, not our own test results.
 
 ### Visual feedback (or lack thereof)
 Because A1706 has no charging LED, **the user cannot use visual inspection
@@ -834,6 +864,7 @@ BatteryCap stands on the shoulders of:
 | 0.2     | 2026-07-03 | @ebowwa | Promoted R7 mitigation from v1.1 to v0.1 (ConflictDetector shipped). Added FR27-FR39, NFR16-NFR18. |
 | 0.3     | 2026-07-03 | @ebowwa | Addressed OQ1: periodic re-apply (hourly) with drift logging to /Library/Logs/BatteryCap.log. Added FR40-FR45, NFR19-NFR20. Revisit removal after 30 days of log evidence. |
 | 0.4     | 2026-07-03 | @ebowwa | Addressed OQ3: non-persistent test mode + first-class CLI for Claude-driven management. Added FR46-FR64. Raised NFR13 to 3000 LOC. |
+| 0.4.1   | 2026-07-03 | @ebowwa | Honesty pass: README "Confirmed against" was an overclaim (we targeted A1706, never tested on it). Split §6 into Reported behavior (third-party cites) / Self-validated (M1 dev) / Pending Intel target. README compatibility section restructured the same way. No code changes. |
 
 ## 21. Research findings incorporated (v0.4)
 

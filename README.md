@@ -31,11 +31,37 @@ to deliver power. See [Battery University BU-808](https://batteryuniversity.com/
 | 15 Sequoia and newer    | Broken            | Kernel entitlement enforcement blocks SMC writes   |
 | Apple Silicon (any)     | Not supported     | Uses `CHWA`, only 80 / 100 — out of scope here      |
 
-Confirmed against: **MacBook Pro A1706 (13" with Touch Bar, 2016–2017)**
-with `bq20z451` gauge chip. Should also work on the broader 2012–2017
-Intel MBP range (A1502/A1398 Retina, A1707/A1708 Touch Bar generation).
-The M1 dev machine this is built on cannot test the SMC write itself —
-only the Intel target can validate that.
+**Targeted for**: MacBook Pro A1706 (13" with Touch Bar, 2016–2017) with
+`bq20z451` gauge chip. The Intel target is being reset to fresh install;
+validation runs against `docs/PRD.md` §18 once it's back up.
+
+**Likely compatible** (third-party reports, not self-tested): broader
+2012–2017 Intel MBP range (A1502/A1398 Retina, A1707/A1708 Touch Bar
+generation) — same SMC key family, same gauge chip era.
+
+### What IS validated (on M1 dev, macOS 26.5)
+
+- ✅ Compiles cleanly (Swift 6.3, Xcode 26.5)
+- ✅ CLI works end-to-end: `status`, `get`, `version`, `conflicts`, `test status`, `help`
+- ✅ `--json` output is valid JSON (parseable by Claude/scripts)
+- ✅ `ConflictDetector` returns expected tri-state on macOS 26.5
+  ("OBC unknown" because Apple moved the flag out of `pmset -g`)
+- ✅ Menu bar UI launches, async paths (conflict detection, refresh) don't crash
+- ✅ Exit codes correct (0 success / 1 generic / 77 EX_NOPERM)
+
+### What is NOT yet validated (pending Intel target)
+
+- ❌ Actual `BCLM` write — M1 uses `CHWA`, not `BCLM`; we can't test the write path here
+- ❌ `BFCL` write (or its silent absence on USB-C Macs)
+- ❌ Test mode end-to-end (write → background-reverter → restore cycle)
+- ❌ LaunchDaemon `RunAtLoad` + `StartInterval=3600` actually fires
+- ❌ `ConflictDetector` on macOS 13/14 where `pmset -g` does expose OBC
+- ❌ Long-running cap hold (hours / days / across reboot)
+- ❌ `osascript ... with administrator privileges` path from the menu bar UI
+- ❌ The `nohup+sleep+CMD` reverter survives parent exit on Intel macOS
+
+The M1 dev machine cannot test any of the SMC-write paths. Only the Intel
+target can. Don't claim "works on A1706" until those tests have run.
 
 > ⚠️ **A1706 has no MagSafe LED.** Don't rely on visual charging feedback.
 > Confirm the cap is working via `pmset -g batt` (shows "AC Power; not
