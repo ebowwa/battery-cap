@@ -4,9 +4,12 @@
 //
 //  Entry point + argv dispatch.
 //
-//  The same binary serves as both the menu bar app and its own privileged
-//  helper. Dispatch is by argv: --write/--read/--boot-apply run as a root
-//  subprocess (spawned via osascript) and exit. No argv → menu bar UI.
+//  The same binary serves as menu bar app, CLI, and its own privileged
+//  helper. Dispatch:
+//    --read/--write/--boot-apply/...  → helper modes (preserved for daemon + backward compat)
+//    <subcommand>                     → CLI dispatch (status, set, test, etc.)
+//    (no args, TTY)                   → menu bar UI
+//    (no args, piped)                 → status (for scripts/SSH)
 //
 
 import AppKit
@@ -14,20 +17,18 @@ import Foundation
 
 let args = CommandLine.arguments
 
-// MARK: Helper modes (run as root via osascript)
+// MARK: Helper modes (preserved for LaunchDaemon + osascript callers)
 
 if args.count >= 2 {
     switch args[1] {
 
     case "--read":
-        // Prints current BCLM value (0..100) to stdout. Exit 0 on success.
         do {
             let cap = try CapController.readCap() ?? -1
             print(cap)
             exit(EXIT_SUCCESS)
         } catch {
-            FileHandle.standardError.write(
-                "read failed: \(error)\n".data(using: .utf8)!)
+            FileHandle.standardError.write("read failed: \(error)\n".data(using: .utf8)!)
             exit(EXIT_FAILURE)
         }
 
@@ -36,40 +37,33 @@ if args.count >= 2 {
         guard args.count == 3,
               let value = UInt8(args[2]),
               (50...100).contains(Int(value)) else {
-            FileHandle.standardError.write(
-                "usage: BatteryCap --write <50-100>\n".data(using: .utf8)!)
+            FileHandle.standardError.write("usage: BatteryCap --write <50-100>\n".data(using: .utf8)!)
             exit(EXIT_FAILURE)
         }
         do {
             try CapController.writeCap(value: value)
-            // Mirror bclm's pattern: also write BFCL = value - 5 if present.
-            // USB-C Macs lack BFCL; the keyNotFound case is expected and OK.
             let bfcl: UInt8 = max(value - 5, 50)
             try? CapController.writeBFCL(value: bfcl)
             exit(EXIT_SUCCESS)
         } catch {
-            FileHandle.standardError.write(
-                "write failed: \(error)\n".data(using: .utf8)!)
+            FileHandle.standardError.write("write failed: \(error)\n".data(using: .utf8)!)
             exit(EXIT_FAILURE)
         }
 
     case "--boot-apply":
-        // Reads cap from config file and applies it. Used by LaunchDaemon.
-        let exitCode = CapController.bootApply()
-        exit(exitCode)
+        // LaunchDaemon entry point. Reads config, checks test mode,
+        // applies saved cap if not in test mode.
+        exit(CapController.bootApply())
 
     case "--unpersist":
-        let exitCode = PersistenceInstaller.uninstall()
-        exit(exitCode)
+        exit(PersistenceInstaller.uninstall())
 
     case "--helper-version":
         print("BatteryCap helper v1.0")
         exit(EXIT_SUCCESS)
 
     case "--detect-conflicts":
-        // Diagnostic mode for the conflict detector. Prints what would be
-        // surfaced in the menu UI. Useful for debugging on dev machines
-        // where the menu bar isn't visible (headless, SSH, etc.).
+        // Kept for backward compat. New code uses `batterycap conflicts`.
         let result = ConflictDetector().detect()
         if result.conflicts.isEmpty {
             print("No conflicts detected.")
@@ -83,25 +77,17 @@ if args.count >= 2 {
         exit(EXIT_SUCCESS)
 
     case "--log-test":
-        // Writes a synthetic test entry to the log so users can verify
-        // logging works end-to-end without waiting for an hour. Also
-        // prints the path so they know where to look.
-        // Needs root (writes to /Library/Logs/).
         DiagnosticsLogger.log("[manual] log-test: synthetic entry for verification")
         print("Wrote test entry to: \(DiagnosticsLogger.logPath)")
         print("Tail with: sudo tail -f \(DiagnosticsLogger.logPath)")
         exit(EXIT_SUCCESS)
 
     default:
-        // Fall through to UI mode for unknown args (let the app show its menu).
+        // Not a helper mode — fall through to CLI dispatch.
         break
     }
 }
 
-// MARK: Menu bar UI mode
+// MARK: CLI dispatch (subcommands + no-arg UI/status)
 
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)  // No Dock icon, just menu bar.
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+exit(CLI.dispatch(args))

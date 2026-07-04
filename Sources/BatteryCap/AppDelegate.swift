@@ -10,6 +10,22 @@ import Foundation
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    // MARK: UI launch entry point (used by CLI when no args + TTY)
+
+    /// Sets up the NSApplication loop and runs it. Returns EXIT_SUCCESS on
+    /// termination. Called from CLI.launchUI() — kept here so the CLI
+    /// doesn't need to know about AppKit.
+    static func launchApplication() -> Int32 {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)  // No Dock icon.
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
+        return EXIT_SUCCESS
+    }
+
+    // MARK: Instance state
+
     private var statusItem: NSStatusItem!
     private var monitor: BatteryMonitor!
     private var capController: CapController!

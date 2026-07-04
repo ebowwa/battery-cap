@@ -125,10 +125,25 @@ struct CapController {
     /// includes system uptime so you can tell which is which in the log:
     /// boot invocations have small uptimes, periodic ones large.
     ///
+    /// **Test mode interaction**: if test mode is active (state file at
+    /// /tmp/batterycap-test-mode.json exists and not expired), skip the
+    /// drift correction — the test cap should not be "corrected" back to
+    /// the saved value mid-test. If state exists but is expired, clean it
+    /// up before proceeding.
+    ///
     /// Returns exit code (0 = success). Failures don't crash; launchd
     /// would back off exponentially.
     static func bootApply() -> Int32 {
         let uptime = Int(ProcessInfo.processInfo.systemUptime)
+
+        // 0. Test mode gate — takes precedence over saved cap.
+        TestModeStore.clearIfExpired()
+        if let testState = TestModeStore.read() {
+            DiagnosticsLogger.log(
+                "[up \(uptime)s] scheduled-apply: test mode active (value=\(testState.testValue)%, \(testState.remainingSeconds)s remaining), skipping drift correction"
+            )
+            return EXIT_SUCCESS
+        }
 
         // 1. Read the saved target cap.
         guard let target = try? ConfigStore.read(), (50...100).contains(target) else {
