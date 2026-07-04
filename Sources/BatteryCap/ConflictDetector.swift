@@ -23,7 +23,8 @@ struct ConflictDetector {
         case battInstalled
         case bclmPersistInstalled
         case nativeChargeLimitSet
-        case obcDetectionUnknown  // "couldn't check, please verify manually"
+        case obcDetectionUnknown  // "couldn't check via pmset, please verify manually"
+        case systemChargeManagementApparent(maxSocToday: Int)  // ioreg-based fallback
 
         var title: String {
             switch self {
@@ -39,6 +40,8 @@ struct ConflictDetector {
                 return "macOS native charge limit is set"
             case .obcDetectionUnknown:
                 return "macOS Optimized Battery Charging status unknown"
+            case .systemChargeManagementApparent(let maxSoc):
+                return "System appears to be limiting charge (max SoC today: \(maxSoc)%)"
             }
         }
 
@@ -87,6 +90,20 @@ struct ConflictDetector {
                        Battery Health → (i). If Optimized Battery Charging \
                        is on, disable it — it will fight the cap.
                        """
+            case .systemChargeManagementApparent(let maxSoc):
+                return """
+                       BatteryCap detected that the battery's max state-of-charge \
+                       today was \(maxSoc)% (from IORegistry BatteryData.DailyMaxSoc). \
+                       This means the system held charge below 100% — either \
+                       Optimized Battery Charging engaged, or a native charge \
+                       limit is set.
+                       Verify at: System Settings → Battery → Battery Health \
+                       AND Charge Limit. Disable whichever is active if you \
+                       want BatteryCap to manage the cap exclusively.
+                       Note: this is an inferred signal, not a definitive flag. \
+                       If you just unplugged before the battery reached 100%, \
+                       DailyMaxSoc could be low for that reason alone.
+                       """
             }
         }
 
@@ -98,6 +115,8 @@ struct ConflictDetector {
                 return .warning  // Active conflict
             case .obcDetectionUnknown:
                 return .info  // Might or might not be a conflict
+            case .systemChargeManagementApparent:
+                return .warning  // Strong inferred signal that cap is active
             }
         }
 
@@ -115,11 +134,25 @@ struct ConflictDetector {
     func detect() -> Result {
         var conflicts: [Conflict] = []
 
-        // 1. macOS Optimized Battery Charging (tri-state)
-        switch detectOptimizedCharging() {
+        // 1. macOS Optimized Battery Charging (tri-state via pmset)
+        let obcDetection = detectOptimizedCharging()
+        switch obcDetection {
         case .on:   conflicts.append(.optimizedBatteryCharging)
-        case .unknown: conflicts.append(.obcDetectionUnknown)
-        case .off: break
+        case .off:  break  // Confirmed off — don't fall through to ioreg
+        case .unknown:
+            // pmset didn't expose it. Try ioreg DailyMaxSoc as fallback
+            // (works on macOS 26+ where Apple moved OBC out of pmset).
+            if let dailyMax = BatteryMonitor.readDailyMaxSoc() {
+                if dailyMax < 100 {
+                    // Strong signal that system held charge below max today.
+                    conflicts.append(.systemChargeManagementApparent(maxSocToday: dailyMax))
+                }
+                // If dailyMax == 100, battery reached full today — no cap
+                // active (or it was disabled). Don't append anything.
+            } else {
+                // Couldn't read ioreg either. Last-resort manual verify.
+                conflicts.append(.obcDetectionUnknown)
+            }
         }
 
         // 2-4. Other tools (binary file-existence checks)
@@ -127,7 +160,7 @@ struct ConflictDetector {
         if isBattInstalled()       { conflicts.append(.battInstalled) }
         if isBclmPersistInstalled(){ conflicts.append(.bclmPersistInstalled) }
 
-        // 5. Native charge limit (macOS 26.4+)
+        // 5. Native charge limit (macOS 26.4+) via pmset chlim
         if isNativeChargeLimitSet() { conflicts.append(.nativeChargeLimitSet) }
 
         return Result(conflicts: conflicts)
@@ -140,22 +173,36 @@ struct ConflictDetector {
     /// OBC has moved across macOS versions:
     /// - macOS 13/14 (Intel target): exposed via `pmset -g` as `optimizedcharging`.
     /// - macOS 26+ (Apple Silicon): moved to private defaults, not userland-readable.
-    /// We try pmset first; if the line isn't there, we return .unknown rather
-    /// than risk a false negative.
+    ///
+    /// Detection strategy (in priority order):
+    ///   1. `pmset -g` for `optimizedcharging` line — definitive when present
+    ///   2. IORegistry `BatteryData.DailyMaxSoc` — if < 100, system held charge
+    ///      below max today (OBC or native limit engaged). Doesn't distinguish
+    ///      which, but better than "unknown."
+    ///   3. Give up → .unknown
+    ///
+    /// The ioreg fallback (strategy 2) lets us return useful signal on
+    /// macOS 26+ where pmset stopped exposing the flag. Surfaced as the
+    /// `.systemChargeManagementApparent(maxSocToday:)` conflict rather than
+    /// as a definitive `.on` so the user knows it's inferred.
     private func detectOptimizedCharging() -> Detection {
-        guard let output = runPmsetG() else { return .unknown }
-
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // Format: "optimizedcharging    1" or "optimizedcharging    0"
-            if trimmed.hasPrefix("optimizedcharging") {
-                let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
-                if let last = parts.last {
-                    return last == "1" ? .on : .off
+        // Strategy 1: pmset -g
+        if let output = runPmsetG() {
+            for line in output.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("optimizedcharging") {
+                    let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+                    if let last = parts.last {
+                        return last == "1" ? .on : .off
+                    }
                 }
             }
         }
-        return .unknown
+
+        // Strategy 2: ioreg DailyMaxSoc (macOS 26+ fallback)
+        // Returns .unknown if we can't read it; caller handles by surfacing
+        // a different conflict (.systemChargeManagementApparent).
+        return .unknown  // see detect() for the ioreg fallback wiring
     }
 
     // MARK: Other tools (file existence checks)

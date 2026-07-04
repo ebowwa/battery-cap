@@ -5,8 +5,14 @@
 //  Reads current battery charge via IOKit's IOPowerSources API.
 //  No privileges required — this is the same path `pmset -g batt` uses.
 //
+//  Also exposes readDailyMaxSoc() which reads BatteryData.DailyMaxSoc from
+//  the AppleSmartBattery IORegistry node. Used by ConflictDetector to infer
+//  OBC / native-charge-limit state on macOS 26+ where pmset no longer
+//  exposes the optimizedcharging flag.
+//
 
 import Foundation
+import IOKit
 import IOKit.ps
 
 struct BatteryMonitor {
@@ -41,4 +47,63 @@ struct BatteryMonitor {
         }
         return -1
     }
+
+    /// Reads BatteryData.DailyMaxSoc from the AppleSmartBattery IORegistry
+    /// node. DailyMaxSoc is the highest state-of-charge the battery reached
+    /// today (resets daily). If < 100, the system held charge below max —
+    /// either OBC engaged or a native charge limit is set.
+    ///
+    /// Returns nil if the IORegistry node or key is unavailable.
+    static func readDailyMaxSoc() -> Int? {
+        let service = IOServiceGetMatchingService(
+            kIOMainPortDefault,
+            IOServiceMatching("AppleSmartBattery")
+        )
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+
+        var propsUnmanaged: Unmanaged<CFMutableDictionary>?
+        let kr = IORegistryEntryCreateCFProperties(
+            service, &propsUnmanaged, kCFAllocatorDefault, 0
+        )
+        guard kr == kIOReturnSuccess,
+              let dict = propsUnmanaged?.takeRetainedValue() as? [String: Any] else {
+            return nil
+        }
+
+        // BatteryData is a nested dictionary containing fuel-gauge telemetry.
+        // The DailyMaxSoc/DailyMinSoc keys live inside it.
+        guard let batteryData = dict["BatteryData"] as? [String: Any] else {
+            return nil
+        }
+        return batteryData["DailyMaxSoc"] as? Int
+    }
+
+    /// Convenience: reads IsCharging + ExternalConnected + CurrentCapacity
+    /// for a "is the system currently holding charge below max?" check.
+    /// Returns (isCharging, externalConnected, currentCapacity) or nil.
+    static func readChargeState() -> (isCharging: Bool, externalConnected: Bool, currentCapacity: Int)? {
+        let service = IOServiceGetMatchingService(
+            kIOMainPortDefault,
+            IOServiceMatching("AppleSmartBattery")
+        )
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+
+        var propsUnmanaged: Unmanaged<CFMutableDictionary>?
+        let kr = IORegistryEntryCreateCFProperties(
+            service, &propsUnmanaged, kCFAllocatorDefault, 0
+        )
+        guard kr == kIOReturnSuccess,
+              let dict = propsUnmanaged?.takeRetainedValue() as? [String: Any] else {
+            return nil
+        }
+        guard let isCharging = dict["IsCharging"] as? Bool,
+              let external = dict["ExternalConnected"] as? Bool,
+              let current = dict["CurrentCapacity"] as? Int else {
+            return nil
+        }
+        return (isCharging, external, current)
+    }
 }
+
