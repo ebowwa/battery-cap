@@ -22,9 +22,9 @@ struct ConflictDetector {
         case aldenteInstalled
         case battInstalled
         case bclmPersistInstalled
-        case nativeChargeLimitSet
+        case nativeChargeLimitSet(soc: Int, ownerPid: Int?)  // macOS 26.4+ via pmset -g battlimit
         case obcDetectionUnknown  // "couldn't check via pmset, please verify manually"
-        case systemChargeManagementApparent(maxSocToday: Int)  // ioreg-based fallback
+        case systemChargeManagementApparent(maxSocToday: Int)  // ioreg fallback when battlimit unavailable
 
         var title: String {
             switch self {
@@ -36,8 +36,8 @@ struct ConflictDetector {
                 return "batt is installed"
             case .bclmPersistInstalled:
                 return "bclm persistence is installed"
-            case .nativeChargeLimitSet:
-                return "macOS native charge limit is set"
+            case .nativeChargeLimitSet(let soc, _):
+                return "macOS native charge limit is set to \(soc)%"
             case .obcDetectionUnknown:
                 return "macOS Optimized Battery Charging status unknown"
             case .systemChargeManagementApparent(let maxSoc):
@@ -75,12 +75,19 @@ struct ConflictDetector {
                        BatteryCap's value.
                        Uninstall with: sudo bclm unpersist
                        """
-            case .nativeChargeLimitSet:
+            case .nativeChargeLimitSet(let soc, let ownerPid):
+                let owner = ownerPid.map { pid in
+                    processName(forPid: pid).map { " (held by \($0), pid \(pid))" } ?? " (held by pid \(pid))"
+                } ?? ""
                 return """
-                       macOS 26.4+ native charge limit (chlim) is enabled. \
-                       On supported hardware this takes precedence over \
-                       BCLM writes.
-                       Disable: System Settings → Battery → Charge Limit → Off
+                       macOS has a manual charge limit set to \(soc)% via the \
+                       native System Settings API\(owner). This will take \
+                       precedence over BatteryCap on platforms where both apply.
+                       Disable: System Settings → Battery → Charge Limit → Off \
+                       (or set to 100%)
+                       Detection source: `pmset -g battlimit` shows \
+                       `chargeSocLimitReason = manualChargeLimit, \
+                       chargeSocLimitSoc = \(soc)`.
                        """
             case .obcDetectionUnknown:
                 return """
@@ -111,16 +118,34 @@ struct ConflictDetector {
             switch self {
             case .optimizedBatteryCharging, .aldenteInstalled,
                  .battInstalled, .bclmPersistInstalled,
-                 .nativeChargeLimitSet:
+                 .nativeChargeLimitSet, .systemChargeManagementApparent:
                 return .warning  // Active conflict
             case .obcDetectionUnknown:
                 return .info  // Might or might not be a conflict
-            case .systemChargeManagementApparent:
-                return .warning  // Strong inferred signal that cap is active
             }
         }
 
         enum Severity { case warning, info }
+
+        /// Resolve a PID to a process name (best-effort, for the conflict message).
+        private func processName(forPid pid: Int) -> String? {
+            // ps -p PID -o comm= returns just the basename of the executable.
+            let task = Process()
+            task.launchPath = "/bin/ps"
+            task.arguments = ["-p", "\(pid)", "-o", "comm="]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = Pipe()
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                return String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                return nil
+            }
+        }
     }
 
     // MARK: Detection
@@ -134,34 +159,45 @@ struct ConflictDetector {
     func detect() -> Result {
         var conflicts: [Conflict] = []
 
-        // 1. macOS Optimized Battery Charging (tri-state via pmset)
+        // 1. Native charge limit (macOS 26.4+) via `pmset -g battlimit`.
+        //    Most definitive signal — gives the actual cap value and the
+        //    PID that set it. Available on Apple Silicon macOS 26+.
+        if let nativeLimit = detectNativeChargeLimitViaBattlimit() {
+            conflicts.append(.nativeChargeLimitSet(soc: nativeLimit.soc,
+                                                    ownerPid: nativeLimit.ownerPid))
+        }
+
+        // 2. macOS Optimized Battery Charging (tri-state via pmset -g)
         let obcDetection = detectOptimizedCharging()
         switch obcDetection {
         case .on:   conflicts.append(.optimizedBatteryCharging)
         case .off:  break  // Confirmed off — don't fall through to ioreg
         case .unknown:
-            // pmset didn't expose it. Try ioreg DailyMaxSoc as fallback
+            // pmset didn't expose OBC. Try ioreg DailyMaxSoc as fallback
             // (works on macOS 26+ where Apple moved OBC out of pmset).
-            if let dailyMax = BatteryMonitor.readDailyMaxSoc() {
-                if dailyMax < 100 {
-                    // Strong signal that system held charge below max today.
-                    conflicts.append(.systemChargeManagementApparent(maxSocToday: dailyMax))
+            // But only if we don't already have a definitive native limit
+            // signal — otherwise we'd double-report.
+            if !conflicts.contains(where: {
+                if case .nativeChargeLimitSet = $0 { return true }
+                return false
+            }) {
+                if let dailyMax = BatteryMonitor.readDailyMaxSoc() {
+                    if dailyMax < 100 {
+                        conflicts.append(.systemChargeManagementApparent(maxSocToday: dailyMax))
+                    }
+                    // If dailyMax == 100, battery reached full today — no cap
+                    // active (or it was disabled). Don't append anything.
+                } else {
+                    // Couldn't read ioreg either. Last-resort manual verify.
+                    conflicts.append(.obcDetectionUnknown)
                 }
-                // If dailyMax == 100, battery reached full today — no cap
-                // active (or it was disabled). Don't append anything.
-            } else {
-                // Couldn't read ioreg either. Last-resort manual verify.
-                conflicts.append(.obcDetectionUnknown)
             }
         }
 
-        // 2-4. Other tools (binary file-existence checks)
+        // 3-5. Other tools (binary file-existence checks)
         if isAldenteInstalled()    { conflicts.append(.aldenteInstalled) }
         if isBattInstalled()       { conflicts.append(.battInstalled) }
         if isBclmPersistInstalled(){ conflicts.append(.bclmPersistInstalled) }
-
-        // 5. Native charge limit (macOS 26.4+) via pmset chlim
-        if isNativeChargeLimitSet() { conflicts.append(.nativeChargeLimitSet) }
 
         return Result(conflicts: conflicts)
     }
@@ -243,8 +279,89 @@ struct ConflictDetector {
         )
     }
 
-    /// Native charge limit on macOS 26.4+ Apple Silicon. Won't be present
-    /// on the A1706 Intel target, but check anyway for forward-compatibility.
+    /// Native charge limit on macOS 26.4+ Apple Silicon. Uses the hidden
+    /// `pmset -g battlimit` subcommand which exposes:
+    ///   chargeSocLimitReason = manualChargeLimit
+    ///   chargeSocLimitSoc = 80
+    ///   chargeSocLimitOwner = <PID>
+    /// Returns nil if the command doesn't exist (older macOS) or no manual
+    /// limit is currently set.
+    ///
+    /// The output may contain multiple entries (one per claim holder). We
+    /// parse per-entry (delimited by `{` ... `}`) and pick the first manual
+    /// entry with a non-zero owner PID — that's the actual claim holder
+    /// (e.g., PowerUIAgent for System Settings, or our own PID if we set it).
+    private func detectNativeChargeLimitViaBattlimit() -> (soc: Int, ownerPid: Int?)? {
+        guard let output = runPmset(["-g", "battlimit"]) else { return nil }
+
+        // Split into entries by `{`. The text before the first `{` is the
+        // "Battery level limits:" header + opening `(`. Each subsequent
+        // chunk is one entry's contents terminated by `}`.
+        let entries = output.split(separator: "{")
+        for entry in entries.dropFirst() {  // skip the header
+            var isManual = false
+            var soc: Int?
+            var owner: Int?
+
+            for line in entry.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.contains("chargeSocLimitReason") &&
+                   trimmed.contains("manualChargeLimit") {
+                    isManual = true
+                }
+                if trimmed.hasPrefix("chargeSocLimitSoc") {
+                    soc = extractIntValue(from: trimmed)
+                }
+                if trimmed.hasPrefix("chargeSocLimitOwner") {
+                    owner = extractIntValue(from: trimmed)
+                }
+            }
+
+            // Stop at the first manual entry with a non-zero owner PID.
+            // owner=0 entries are system mirrors/echoes, not the actual claim.
+            if isManual, let s = soc, let own = owner, own != 0 {
+                return (s, own)
+            }
+        }
+
+        // Fallback: if all manual entries have owner=0, take the first manual
+        // one and report nil for the owner. Still useful — the user knows the
+        // cap is set, just not by whom.
+        for entry in entries.dropFirst() {
+            var isManual = false
+            var soc: Int?
+            for line in entry.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.contains("chargeSocLimitReason") &&
+                   trimmed.contains("manualChargeLimit") {
+                    isManual = true
+                }
+                if trimmed.hasPrefix("chargeSocLimitSoc") {
+                    soc = extractIntValue(from: trimmed)
+                }
+            }
+            if isManual, let s = soc {
+                return (s, nil)
+            }
+        }
+
+        return nil
+    }
+
+    /// Parses "key = value;" lines into Int.
+    private func extractIntValue(from line: String) -> Int? {
+        // Format: "chargeSocLimitSoc = 80;" or "chargeSocLimitOwner = 70699;"
+        let parts = line.split(separator: "=")
+        guard parts.count >= 2 else { return nil }
+        let rawTail = parts[1].trimmingCharacters(in: .whitespaces)
+        // Strip trailing ; and any whitespace
+        let cleaned = rawTail.replacingOccurrences(of: ";", with: "")
+                             .trimmingCharacters(in: .whitespaces)
+        return Int(cleaned)
+    }
+
+    /// Native charge limit fallback (macOS 13-14, Intel target via pmset chlim).
+    /// Not used on macOS 26+ where battlimit is the definitive source.
     private func isNativeChargeLimitSet() -> Bool {
         guard let output = runPmsetG() else { return false }
 
@@ -264,12 +381,15 @@ struct ConflictDetector {
     // MARK: Subprocess helper
 
     /// Runs `pmset -g` and returns stdout. Returns nil on any error.
-    /// Cached per-instance: callers should construct a fresh ConflictDetector
-    /// rather than reusing across detections (we want fresh data each time).
     private func runPmsetG() -> String? {
+        return runPmset(["-g"])
+    }
+
+    /// Runs `pmset` with arbitrary args and returns stdout.
+    private func runPmset(_ args: [String]) -> String? {
         let task = Process()
         task.launchPath = "/usr/bin/pmset"
-        task.arguments = ["-g"]
+        task.arguments = args
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = Pipe()  // Discard stderr.
