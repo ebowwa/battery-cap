@@ -15,10 +15,13 @@ BINARY_NAME="BatteryCap"
 
 cd "$ROOT_DIR"
 
-echo "==> Building (release, universal binary)..."
-# Universal binary: contains both arm64 (Apple Silicon) and x86_64 (Intel).
-# One .app runs natively on both architectures — no separate builds needed.
-swift build -c release --arch arm64 --arch x86_64
+echo "==> Building (release, host arch)..."
+# Build for the host architecture only. Universal binaries via
+# `--arch arm64 --arch x86_64` have produced broken Mach-O bundles in
+# testing (binary hangs on launch). For cross-arch deployment (e.g.,
+# building on M1 for an Intel Mac), build on the target machine instead
+# or use `swift build -c release --arch x86_64` explicitly and verify.
+swift build -c release
 
 BUILT_BIN="$ROOT_DIR/.build/release/$BINARY_NAME"
 if [[ ! -f "$BUILT_BIN" ]]; then
@@ -26,13 +29,18 @@ if [[ ! -f "$BUILT_BIN" ]]; then
     exit 1
 fi
 
-# Verify universal.
+# Sanity check: binary must respond to --version quickly. Catches the
+# broken-universal-build failure mode where SwiftPM "succeeds" but the
+# resulting binary hangs.
+echo "==> Verifying binary is responsive..."
+if ! timeout 5 "$BUILT_BIN" version >/dev/null 2>&1; then
+    echo "ERROR: built binary does not respond within 5s. Aborting install." >&2
+    echo "Try: swift package clean && swift build -c release" >&2
+    exit 1
+fi
+
 echo "==> Binary arch:"
 file "$BUILT_BIN"
-if ! file "$BUILT_BIN" | grep -q "universal"; then
-    echo "WARNING: binary is not universal. Will only run on one arch."
-    echo "To fix: install Xcode with both iOS + macOS SDK components."
-fi
 
 echo "==> Packaging into $APP_PATH..."
 rm -rf "$APP_PATH"
@@ -69,6 +77,12 @@ PLIST
 
 # Clear quarantine attr so double-click works without Gatekeeper complaints.
 xattr -cr "$APP_PATH" 2>/dev/null || true
+
+# Ad-hoc re-sign the bundle. The linker's ad-hoc signature only covers the
+# binary; macOS refuses to `open` an .app bundle whose signature doesn't
+# also cover Info.plist and Resources. Re-signing the bundle fixes this
+# so `open /Applications/BatteryCap.app` actually launches the UI.
+codesign --force --deep --sign - "$APP_PATH" 2>&1 | head -3
 
 echo "==> Installed. Launch with: open $APP_PATH"
 

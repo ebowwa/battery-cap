@@ -19,14 +19,16 @@ enum CLI {
     /// (binary path at index 0, command at index 1, sub-args after).
     /// Returns exit code.
     static func dispatch(_ args: [String]) -> Int32 {
-        // args.count <= 1: no command given.
-        //   TTY present  → launch menu bar UI (preserves "double-click" UX).
-        //   No TTY       → print status (for SSH scripts, pipes).
+        // No args → launch the menu bar UI.
+        // NOTE: We used to check `isatty(stdin)` here and fall through to
+        // status output when not a TTY. That broke launching via `open
+        // /Applications/BatteryCap.app` because LaunchServices attaches
+        // /dev/null as stdin — making isatty return 0 — and the app would
+        // silently print status to /dev/null and exit instead of showing
+        // the menu bar. If the user explicitly wants status, they can run
+        // `batterycap status`.
         if args.count <= 1 {
-            if isatty(fileno(stdin)) != 0 {
-                return launchUI()
-            }
-            return StatusCommand.run(args: [])
+            return launchUI()
         }
 
         let command = args[1].lowercased()
@@ -635,9 +637,13 @@ enum ConflictsCommand {
 enum VersionCommand {
     static func run(args: [String]) -> Int32 {
         if CLI.globalJSON {
-            CLI.printJSON(["version": "0.3.0", "target": "Intel MacBook (A1706)"])
+            CLI.printJSON([
+                "version": "0.6.0",
+                "platform": Platform.current.shortLabel,
+                "can_control_charge": Platform.current.canControlChargeViaSMC
+            ])
         } else {
-            CLI.out("BatteryCap v0.3.0")
+            CLI.out("BatteryCap v0.6.0 (\(Platform.current.shortLabel))")
         }
         return EXIT_SUCCESS
     }
