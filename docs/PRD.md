@@ -313,8 +313,8 @@ be relied on as a test criterion.
 ### Code quality
 | ID   | Requirement                                                  |
 | ---- | ----------------------------------------------------------- |
-| NFR13 | Source under 1000 LOC (current: ~700)                      |
-| NFR14 | Zero external package dependencies                          |
+| NFR13 | Source under 2000 LOC (raised from 1000 in v0.3 — original cap was set when scope was "minimal menu bar app"; scope grew to include conflict detection, drift logging, and now CLI + test mode. Current: ~1523 LOC.) |
+| NFR14 | Zero external package dependencies (no ArgumentParser — hand-rolled dispatcher) |
 | NFR15 | No force-unwraps, no `try!`, no fatal errors in production paths |
 | NFR16 | Conflict detection must never produce false positives (verified absence required before claiming "clean") |
 | NFR17 | Conflict detection completes in < 500ms (currently ~150ms)  |
