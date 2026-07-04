@@ -282,6 +282,33 @@ be relied on as a test criterion.
 | FR44 | On drift detection, write corrective BCLM + BFCL value, then re-read to verify |
 | FR45 | Log structured fields (`target=`, `actual=`, `drift=`, `verify=`, `effective=`) for grep-friendly analysis |
 
+### Test mode (OQ3 — non-persistent cap)
+| ID  | Requirement                                                            |
+| --- | --------------------------------------------------------------------- |
+| FR46 | `test start` writes test cap to SMC, leaves ConfigStore untouched     |
+| FR47 | Default test value = `current charge + 3`, clamped 50..100             |
+| FR48 | Default test duration = 30 minutes; configurable via `--for MIN`       |
+| FR49 | Explicit test value via `--value V` (50..100)                          |
+| FR50 | State persisted to `/tmp/batterycap-test-mode.json` (non-persistent across reboots) |
+| FR51 | Background reverter via `nohup+sleep+CMD` survives parent exit         |
+| FR52 | `--boot-apply` skips drift correction while test mode is active        |
+| FR53 | `test end` kills reverter, restores original cap, clears state file    |
+| FR54 | `test status` shows active/inactive + remaining time                   |
+
+### CLI (Claude-driven management surface)
+| ID  | Requirement                                                            |
+| --- | --------------------------------------------------------------------- |
+| FR55 | Subcommand structure: `status / get / set / clear / test / persist / log / conflicts` |
+| FR56 | Global `--json` flag for machine-readable output (parseable by Claude/scripts) |
+| FR57 | Global `--help` / `-h` flag for per-command help                       |
+| FR58 | No args + TTY → launch menu bar UI                                     |
+| FR59 | No args + no TTY (pipe/SSH) → print status                             |
+| FR60 | Commands requiring root exit with EX_NOPERM (77) when run unprivileged |
+| FR61 | Unknown commands exit 1 with usage hint                                |
+| FR62 | All existing `--read`/`--write`/`--boot-apply` modes preserved for LaunchDaemon + osascript |
+| FR63 | `version` subcommand (and `--version`) prints version                  |
+| FR64 | `log show [-n N]` tails drift log; `log grep PATTERN` filters it       |
+
 ---
 
 ## 8. Non-Functional Requirements
@@ -313,7 +340,7 @@ be relied on as a test criterion.
 ### Code quality
 | ID   | Requirement                                                  |
 | ---- | ----------------------------------------------------------- |
-| NFR13 | Source under 2000 LOC (raised from 1000 in v0.3 — original cap was set when scope was "minimal menu bar app"; scope grew to include conflict detection, drift logging, and now CLI + test mode. Current: ~1523 LOC.) |
+| NFR13 | Source under 3000 LOC (raised from 2000 in v0.4 — CLI subcommand structure + test mode lifecycle added ~1000 LOC. Current: 2545 LOC. Cap is intentionally loose; the codebase is still small enough to read in 60 min.) |
 | NFR14 | Zero external package dependencies (no ArgumentParser — hand-rolled dispatcher) |
 | NFR15 | No force-unwraps, no `try!`, no fatal errors in production paths |
 | NFR16 | Conflict detection must never produce false positives (verified absence required before claiming "clean") |
@@ -658,9 +685,17 @@ These are things we haven't decided about yet. None block v1.0.
   confidence?~~ **Moot for A1706** (no LED to read). Would only matter if
   extending support to A1502/A1398 (2013–2015 Retina). Defer unless those
   models become primary targets.
-- **OQ3**: Should we add a "test mode" that auto-sets cap to `current + 3`
-  for 30 minutes then reverts? Useful for one-shot validation, but
-  complicates the state machine.
+- **OQ3**: ~~Should we add a "test mode" that auto-sets cap to `current + 3`
+  for 30 minutes then reverts?~~ **SHIPPED in v0.4.** Test mode writes the
+  test cap to SMC, leaves ConfigStore untouched (so saved cap is preserved),
+  spawns a background reverter via `nohup+sleep+CMD` that survives parent
+  exit, and the LaunchDaemon's drift check respects the test window (logs
+  "test mode active, skipping" instead of "correcting"). State file at
+  `/tmp/batterycap-test-mode.json` (cleared on reboot — non-persistent by
+  design). CLI: `test start [--value V] [--for MIN]`, `test end`, `test
+  status`. Default value = `current charge + 3` clamped 50..100, default
+  duration = 30 min. See §7 FR46-FR52, `TestModeStore.swift`,
+  `TestModeController.swift`.
 - **OQ4**: For v2: SMJobBless proper helper, or stick with osascript
   indefinitely? Depends on whether osascript path survives future macOS
   versions.
@@ -798,6 +833,28 @@ BatteryCap stands on the shoulders of:
 | 0.1     | 2026-07-03 | @ebowwa | Initial PRD. Covers v0.1 shipped.|
 | 0.2     | 2026-07-03 | @ebowwa | Promoted R7 mitigation from v1.1 to v0.1 (ConflictDetector shipped). Added FR27-FR39, NFR16-NFR18. |
 | 0.3     | 2026-07-03 | @ebowwa | Addressed OQ1: periodic re-apply (hourly) with drift logging to /Library/Logs/BatteryCap.log. Added FR40-FR45, NFR19-NFR20. Revisit removal after 30 days of log evidence. |
+| 0.4     | 2026-07-03 | @ebowwa | Addressed OQ3: non-persistent test mode + first-class CLI for Claude-driven management. Added FR46-FR64. Raised NFR13 to 3000 LOC. |
+
+## 21. Research findings incorporated (v0.4)
+
+Survey of 6 reference implementations informed v0.4 design:
+
+| Repo | Pattern borrowed |
+| --- | --- |
+| `itsjoshpark/charge-limiter` | Confirms BFCL is purely cosmetic (LED) — matches our `try?` silent-ignore |
+| `DevNulPavel/osx_battery_charge_limit` | The `pmset -g` parsing approach for OBC detection |
+| `hilfiger1/BatteryGuard` | (Nothing new — PySimpleGUI fork of DevNulPavel) |
+| `netlinux-ai/battery-tray` | Polling drift detection (we do this hourly via LaunchDaemon) |
+| `netlinux-ai/applesmc-next` | BFCL ≥2% below BCLM rule (we use 5% for safety margin) |
+| `Tsikovskic/PowerLimit` | "Full Charge Override" pattern → inspired our test mode |
+
+**SMC keys we don't yet use** (deferred for v1.1+ if needed):
+- `CH0B` (Charging Control) — finer-grained enable/disable than BCLM. Seen in PowerLimit.
+- `TB0T` (battery temperature) — possible safety guardrail (pause at 45°C).
+
+**Patterns we deliberately didn't adopt:**
+- `SMJobBless` privileged helper (PowerLimit uses this) — too much signing overhead for v1, revisit when folding into larger macOS app.
+- Drift detection via 5-second polling (battery-tray) — too noisy, hourly via LaunchDaemon is sufficient and adds < 1% battery drain.
 
 ---
 

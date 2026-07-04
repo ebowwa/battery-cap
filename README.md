@@ -86,6 +86,75 @@ Launch `BatteryCap.app`. A battery icon appears in the menu bar. Click it to:
 - See conflict status (top of menu). `⚠️ ` prefix on the menu bar icon
   means another tool or setting may be fighting BatteryCap.
 
+## CLI reference
+
+For SSH / Claude-driven management, the binary is also a CLI. Same path as
+the .app binary, just invoked with subcommands:
+
+```sh
+BIN=/Applications/BatteryCap.app/Contents/MacOS/BatteryCap
+
+$BIN status                       # Full state: charge, cap, test, persist, conflicts
+$BIN status --json                # Same, JSON for scripts/Claude
+$BIN get cap                      # Just the cap value
+$BIN get charge                   # Just the charge %
+$BIN conflicts                    # List conflicts (or "none")
+$BIN conflicts --json             # JSON with title + detail per conflict
+
+sudo $BIN set 60                  # Persistent cap at 60% (writes SMC + config)
+sudo $BIN clear                   # Remove cap (= set 100%)
+
+sudo $BIN test start              # Test cap at current+3 for 30min (non-persistent)
+sudo $BIN test start --for 60     # 60-minute test
+sudo $BIN test start --value 55   # Specific value (skip auto-calc)
+$BIN test status                  # Check test state, remaining time
+sudo $BIN test end                # End test, restore previous cap
+
+$BIN persist status               # Is LaunchDaemon installed?
+sudo $BIN persist enable          # Install LaunchDaemon (boot + hourly)
+sudo $BIN persist disable         # Uninstall
+
+$BIN log show                     # Tail drift log (last 100 lines)
+$BIN log show -n 500              # More lines
+$BIN log grep drift=true         # Filter to drift events only
+
+$BIN ui                           # Launch menu bar UI
+$BIN version
+$BIN help                         # Full help
+$BIN help test                    # Per-command help
+```
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Generic failure (SMC write error, etc.) |
+| 64 | Usage error (EX_USAGE) |
+| 77 | Needs root (EX_NOPERM) — re-run with `sudo` |
+
+### Test mode (non-persistent)
+
+Test mode sets a cap that **does not survive reboots or overwrite your
+saved cap**. Use it for one-shot validation:
+
+```sh
+# Battery is at 51%, you want to verify the cap mechanism works:
+sudo $BIN test start
+# → writes BCLM = 54 (= 51 + 3), schedules revert to 100 in 30 minutes
+# → background reverter survives your SSH session ending
+# → hourly LaunchDaemon sees test mode active, skips drift correction
+
+# Watch the plateau:
+watch -n 30 'pmset -g batt | head -1'
+
+# End early:
+sudo $BIN test end
+# → kills background reverter, restores cap to 100 (or whatever was set)
+```
+
+State file: `/tmp/batterycap-test-mode.json` (cleared on reboot, by design).
+
 ## Troubleshooting
 
 ### "I set the cap but the battery still charges to 100%"
