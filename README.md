@@ -27,7 +27,8 @@ to deliver power. See [Battery University BU-808](https://batteryuniversity.com/
 | macOS version           | Intel Macs                     | Apple Silicon Macs                       |
 | ----------------------- | ------------------------------ | ---------------------------------------- |
 | 12 Monterey and older   | Should work (BCLM, untested)   | Should work (CHWA, untested)             |
-| 13 Ventura, 14 Sonoma   | Target platforms (BCLM)        | Should work (CHWA, untested)             |
+| 13 Ventura              | ✅ Self-validated A1706 (BCLM) | Should work (CHWA, untested)             |
+| 14 Sonoma               | Targeted (BCLM, untested)     | Should work (CHWA, untested)             |
 | 15 Sequoia – 26.3       | Broken (entitlement block)     | Broken (entitlement block)               |
 | 26.4+                   | N/A (Intel caps here)          | Use **native** charge limit, not BatteryCap |
 
@@ -82,17 +83,43 @@ read returns `keyNotFound`. That's accurate, not a bug.
 - ✅ Platform detection: `Platform.current` resolves correctly on both archs
 - ✅ `--probe-smc` diagnostic correctly reports which SMC keys are accessible
 
-### What is NOT yet validated
+### Self-validated on Intel A1706 (macOS 13.7.8 Ventura)
 
-- ❌ Actual `BCLM` write (Intel target — pending A1706 reset completion)
+Captured 2026-07-06 13:38 PDT via SSH-driven validation:
+
+- ✅ **Universal binary built on M1/Swift 6.3 runs on i5/Swift 5.8** via Swift ABI stability. 708KB fat binary, x86_64 slice executes natively against system Swift runtime (built against `.macOS(.v13)` deployment target).
+- ✅ Platform detection: `Intel · macOS 13.7` resolves correctly
+- ✅ **BCLM SMC write confirmed**: `batterycap test start --value 54` → `get cap` readback returns 54
+- ✅ **EC honors cap within 8 seconds**: `pmset -g batt` flips from `charging` → `AC attached; not charging`
+- ✅ Test mode end-to-end: write → background-reverter → restore cycle works cleanly
+- ✅ `test end` auto-restores cap to original (100%)
+- ✅ Baseline BCLM reads 100% (factory default — no prior tool had written it)
+
+Test setup: SSH from M1 dev → i5 (passwordless pubkey auth). Binary built on M1
+with `swift build -c release --arch arm64 --arch x86_64`, SCPed to `~/BatteryCap`
+on i5, validated via `batterycap test` non-persistent mode (auto-restores on
+`test end` or 30min TTL via background reverter daemon). See
+`Scripts/validate-on-i5.sh` for the validation script.
+
+### Pending validation
+
 - ❌ `CHWA` write on Apple Silicon macOS 13–14 (older firmware, untested)
-- ❌ `BFCL` write (Intel-only)
-- ❌ Test mode end-to-end (write → background-reverter → restore cycle)
+- ❌ `BFCL` write on MagSafe-equipped Macs (keyNotFound on A1706 is expected since USB-C only; actual LED-equipped Mac untested)
+- ❌ Other Intel MacBook variants: A1707 (15" TB), A1708 (Function-row), A1502/A1398 (Retina w/ MagSafe 2)
+- ❌ macOS 12 Monterey, 11 Big Sur, older (BCLM expected to work, untested)
 - ❌ LaunchDaemon `RunAtLoad` + `StartInterval=3600` actually fires
-- ❌ `ConflictDetector` on macOS 13/14 where `pmset -g` does expose OBC
+- ❌ `ConflictDetector` on macOS 13/14 where `pmset -g` does expose OBC (Ventura returns "unknown" — see Ventura limitations below)
 - ❌ Long-running cap hold (hours / days / across reboot)
-- ❌ `osascript ... with administrator privileges` path from the menu bar UI
+- ❌ `osascript ... with administrator privileges` path from the menu bar UI (validation ran via `sudo bash` directly, not via osascript)
 - ❌ `nohup+sleep+CMD` reverter survives parent exit on Intel macOS
+
+### Ventura (macOS 13) limitations
+
+Observed on A1706 / macOS 13.7.8 Ventura during 2026-07-06 validation:
+
+- **`pmset -g battlimit` is unavailable** — returns `Error: unhandled argument battlimit`. This subcommand was added in macOS 14. BatteryCap's `ad81911` detection path (native charge limit via `pmset -g battlimit`) does not work on Ventura. Use `pmset -g batt` (look for "AC Power; not charging") or `system_profiler SPPowerDataType` for verification instead.
+- **`ConflictDetector` reports "macOS Optimized Battery Charging status unknown"** — the ioreg OBC fallback (`bf98913` commit) does not resolve on Ventura. This is a known gap, not a bug. The conflict warning still appears in `batterycap status` output even when the cap is working correctly.
+- **Clamshell mode caveat**: `sudo pmset -a disablesleep 1` does NOT flip the `PreventSystemSleep` assertion on this hardware+macOS combo (assertion stays at 0 in `pmset -g assertions`). However, `ttyskeepawake=1` (default) holds the Mac awake during active SSH sessions — sufficient for SSH-driven headless use, NOT sufficient for bagging without an active session.
 
 > ⚠️ **A1706 has no MagSafe LED.** Don't rely on visual charging feedback.
 > Confirm the cap is working via `pmset -g batt` (shows "AC Power; not
